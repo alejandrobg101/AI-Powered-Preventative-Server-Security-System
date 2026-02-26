@@ -1,0 +1,7 @@
+test/data/Monday-WorkingHours.pcap_ISCX.csv filter=lfs diff=lfs merge=lfs -text
+test/data/synthetic_security_dataset.csv filter=lfs diff=lfs merge=lfs -text
+test/data/Thursday-WorkingHours-Afternoon-Infilteration.pcap_ISCX.csv filter=lfs diff=lfs merge=lfs -text
+test/data/Thursday-WorkingHours-Morning-WebAttacks.pcap_ISCX.csv filter=lfs diff=lfs merge=lfs -text
+test/data/Tuesday-WorkingHours.pcap_ISCX.csv filter=lfs diff=lfs merge=lfs -text
+test/data/Wednesday-workingHours.pcap_ISCX.csv filter=lfs diff=lfs merge=lfs -text
+*.csv filter=lfs diff=lfs merge=lfs -text
