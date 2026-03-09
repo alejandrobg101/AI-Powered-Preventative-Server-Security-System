@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import time
+import os
+import joblib
 
 # ────────────────────────────────────────────
 # 1. LOAD DATASET
@@ -23,7 +25,7 @@ dataset_files = [
     "./data/Friday-WorkingHours-Morning.pcap_ISCX.csv", # PortScan
     "./data/Monday-WorkingHours.pcap_ISCX.csv",         # Benign only
 ]
-file_path = "../../Capstone/test/data/Friday-WorkingHours-Afternoon-PortScan.pcap_ISCX.csv"
+file_path = "../test/data/Friday-WorkingHours-Afternoon-PortScan.pcap_ISCX.csv"
 
 df = pd.read_csv(file_path)
 df.columns = df.columns.str.strip()
@@ -204,6 +206,21 @@ with torch.no_grad():
 # Threshold based on actual attack ratio in data
 ae_threshold = np.percentile(errors, (1 - attack_ratio) * 100)
 ae_preds     = (errors > ae_threshold).astype(int)
+
+# ────────────────────────────────────────────
+# SAVE TRAINED MODEL + PREPROCESSING OBJECTS
+# ────────────────────────────────────────────
+
+#Create artifacts directory if it doesn't exist
+os.makedirs("./artifacts", exist_ok=True)
+
+# Save model state dict, scaler, threshold, and feature columns for live scoring
+torch.save(model.state_dict(), "./artifacts/autoencoder_model.pth")
+joblib.dump(scaler, "./artifacts/scaler.pkl")
+joblib.dump(ae_threshold, "./artifacts/threshold.pkl")
+joblib.dump(X.columns.tolist(), "./artifacts/feature_columns.pkl")
+
+print("Saved model, scaler, threshold, and feature columns.")
 
 # ────────────────────────────────────────────
 # 9. EVALUATION & STATS
