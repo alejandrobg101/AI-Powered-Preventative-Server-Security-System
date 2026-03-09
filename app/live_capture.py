@@ -486,7 +486,7 @@ def score_flow(key: tuple, flow: FlowStats):
         recon = model(x_tensor)
         error = torch.mean((x_tensor - recon) ** 2, dim=1).item()
 
-    label = "⚠  ATTACK" if error > threshold else "✓  BENIGN"
+    label = "X  ATTACK" if error > threshold else "O  BENIGN"
     proto_map = {6: "TCP", 17: "UDP", 1: "ICMP"}
     proto_str = proto_map.get(key[4], str(key[4]))
 
