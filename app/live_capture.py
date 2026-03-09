@@ -1,18 +1,3 @@
-"""
-live_capture.py
-───────────────────────────────────────────────────────────────────────────────
-Scapy-based live packet capture module for network intrusion detection.
-
-Extracts the same 78 CIC-IDS2017 features used during autoencoder training,
-then scores each completed flow against the saved model artifacts.
-
-Usage:
-    sudo python live_capture.py                        # capture on default iface
-    sudo python live_capture.py --iface eth0           # specific interface
-    sudo python live_capture.py --iface eth0 --pcap    # also save a .pcap
-    sudo python live_capture.py --timeout 60           # stop after 60 s
-"""
-
 import argparse
 import time
 import math
@@ -63,7 +48,7 @@ model = Autoencoder(len(feature_columns))
 model.load_state_dict(torch.load("artifacts/autoencoder_model.pth", map_location="cpu"))
 model.eval()
 
-print(f"[INFO] Model loaded — {len(feature_columns)} features, threshold={threshold:.6f}")
+print(f"[INFO] Model loaded - {len(feature_columns)} features, threshold={threshold:.6f}")
 
 # Show scaler mean/std for flag features so we understand the training distribution
 flag_features = ["ACK Flag Count", "SYN Flag Count", "FIN Flag Count", "PSH Flag Count", "Fwd PSH Flags"]
