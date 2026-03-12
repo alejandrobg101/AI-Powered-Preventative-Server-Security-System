@@ -11,6 +11,8 @@ import numpy as np
 import time
 import os
 import joblib
+from scapy.all import sniff
+from scapy.layers.inet import IP, TCP, UDP
 
 # ────────────────────────────────────────────
 # 1. LOAD DATASET
@@ -223,6 +225,167 @@ joblib.dump(X.columns.tolist(), "./artifacts/feature_columns.pkl")
 print("Saved model, scaler, threshold, and feature columns.")
 
 # ────────────────────────────────────────────
+# Start Sniffing Packets
+# ────────────────────────────────────────────
+
+def start_live_sniff(model, scaler, ae_threshold, feature_columns, interface=None, count=0):
+    print(f"Starting live sniffing on interface {interface or 'default'}...")
+    global flow_counter
+    flow_counter = count
+    sniff(prn=lambda pkt: live_callback(pkt, model, scaler, ae_threshold, feature_columns),
+          iface=interface,
+          count=count,
+          store=False)
+
+# ────────────────────────────────────────────
+# Multi-packet Monitoring
+# ────────────────────────────────────────────
+flows = {}
+FLOW_PACKET_LIMIT = 10
+flow_counter = 0
+def live_callback(pkt, model, scaler, ae_threshold, feature_columns):
+    global flow_counter
+    if not (pkt.haslayer(IP) and (pkt.haslayer(TCP) or pkt.haslayer(UDP))):
+        flow_counter = flow_counter - 1
+        return
+
+    src = pkt[IP].src
+    dst = pkt[IP].dst
+
+    l4 = pkt[TCP] if pkt.haslayer(TCP) else pkt[UDP]
+    sport = l4.sport
+    dport = l4.dport
+    proto = pkt[IP].proto
+
+    flow_id = (src, dst, sport, dport, proto)
+
+    pkt_data = packet_to_features(pkt)
+
+    if flow_id not in flows:
+        flows[flow_id] = []
+
+    flows[flow_id].append(pkt_data)
+
+    # When flow has enough packets → analyze
+    if len(flows[flow_id]) >= FLOW_PACKET_LIMIT:
+
+        flow_packets = flows[flow_id]
+
+        prediction, error = detect_event(
+            flow_packets, model, scaler, ae_threshold, feature_columns
+        )
+
+        print(f"[Live Flow] Packets: {len(flow_packets)} | Prediction: {prediction} | Error: {error:.6f}")
+
+        del flows[flow_id]
+    if flow_counter == 1:
+        for leftover_flow_id, leftover_packets in flows.items():
+            prediction, error = detect_event(leftover_packets, model, scaler, ae_threshold, feature_columns)
+            print(f"[Live Flow - Leftover] Packets: {len(leftover_packets)} | Prediction: {prediction} | Error: {error:.6f}")
+        flows.clear()
+    flow_counter = flow_counter - 1
+
+def packet_to_features(pkt):
+    data = {}
+
+    data["timestamp"] = pkt.time
+    data["length"] = len(pkt)
+
+    if pkt.haslayer(TCP) or pkt.haslayer(UDP):
+        l4 = pkt[TCP] if pkt.haslayer(TCP) else pkt[UDP]
+        data["Source Port"] = int(l4.sport)
+        data["Destination Port"] = int(l4.dport)
+    else:
+        data["Source Port"] = 0
+        data["Destination Port"] = 0
+
+    if pkt.haslayer(TCP):
+        data["flags"] = int(pkt[TCP].flags)
+    else:
+        data["flags"] = 0
+
+    return data
+
+def flow_to_features(flow_packets, feature_columns):
+
+    features = {col: 0 for col in feature_columns}
+
+    timestamps = [p["timestamp"] for p in flow_packets]
+    lengths = [p["length"] for p in flow_packets]
+
+    duration = max(timestamps) - min(timestamps)
+    duration = max(duration, 1e-6)
+
+    # ── Flow duration ──
+    if "Flow Duration" in feature_columns:
+        features["Flow Duration"] = duration
+
+    # ── Packet length statistics ──
+    if "Min Packet Length" in feature_columns:
+        features["Min Packet Length"] = min(lengths)
+
+    if "Max Packet Length" in feature_columns:
+        features["Max Packet Length"] = max(lengths)
+
+    if "Packet Length Mean" in feature_columns:
+        features["Packet Length Mean"] = sum(lengths) / len(lengths)
+
+    if len(lengths) > 1:
+        mean = sum(lengths) / len(lengths)
+        variance = sum((x - mean) ** 2 for x in lengths) / len(lengths)
+
+        if "Packet Length Variance" in feature_columns:
+            features["Packet Length Variance"] = variance
+
+        if "Packet Length Std" in feature_columns:
+            features["Packet Length Std"] = variance ** 0.5
+
+    # ── Flow throughput ──
+    if "Flow Bytes/s" in feature_columns:
+        features["Flow Bytes/s"] = sum(lengths) / duration
+
+    if "Flow Packets/s" in feature_columns:
+        features["Flow Packets/s"] = len(lengths) / duration
+
+    # ── Packet counts (basic approximation) ──
+    if "Total Fwd Packets" in feature_columns:
+        features["Total Fwd Packets"] = len(flow_packets)
+
+    if "Total Backward Packets" in feature_columns:
+        features["Total Backward Packets"] = 0
+
+    # ── Ports (constant for a flow) ──
+    if "Source Port" in feature_columns:
+        features["Source Port"] = flow_packets[0]["Source Port"]
+
+    if "Destination Port" in feature_columns:
+        features["Destination Port"] = flow_packets[0]["Destination Port"]
+
+    # ── Return vector in correct order ──
+    return [features[col] for col in feature_columns]
+
+# ────────────────────────────────────────────
+# Detect event using AE model (packet input)
+# ────────────────────────────────────────────
+def detect_event(flow_packets, model, scaler, ae_threshold, feature_columns):
+
+    feature_vector = flow_to_features(flow_packets, feature_columns)
+    event_df = pd.DataFrame([feature_vector], columns=feature_columns)
+
+    # Normalize
+    event_scaled = scaler.transform(event_df)
+    event_tensor = torch.tensor(event_scaled, dtype=torch.float32)
+
+    with torch.no_grad():
+        reconstructed = model(event_tensor)
+        error = torch.mean((event_tensor - reconstructed) ** 2).item()
+
+    prediction = "ATTACK" if error > ae_threshold else "BENIGN"
+
+    return prediction, error
+
+
+# ────────────────────────────────────────────
 # 9. EVALUATION & STATS
 # ────────────────────────────────────────────
 TARGET_NAMES = ["Benign", "Attack"]
@@ -321,3 +484,7 @@ plt.show()
 print("Saved: ae_error_distribution.png")
 
 print("\nDone.")
+
+# Test Case
+# if __name__ == "__main__":
+#     start_live_sniff(model, scaler, ae_threshold, feature_columns, interface=None, count=50)
