@@ -13,24 +13,34 @@ import os
 import joblib
 
 # ────────────────────────────────────────────
-# 1. LOAD DATASET
+# 1. LOAD DATASET  — all 8 files
 # ────────────────────────────────────────────
 dataset_files = [
     "./data/Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv",
     "./data/Friday-WorkingHours-Afternoon-PortScan.pcap_ISCX.csv",
-    "./data/Tuesday-WorkingHours.pcap_ISCX.csv",       # FTP-Patator, SSH-Patator
-    "./data/Wednesday-workingHours.pcap_ISCX.csv",     # DoS Hulk, Slowloris, etc.
+    "./data/Tuesday-WorkingHours.pcap_ISCX.csv",
+    "./data/Wednesday-workingHours.pcap_ISCX.csv",
     "./data/Thursday-WorkingHours-Morning-WebAttacks.pcap_ISCX.csv",
     "./data/Thursday-WorkingHours-Afternoon-Infilteration.pcap_ISCX.csv",
-    "./data/Friday-WorkingHours-Morning.pcap_ISCX.csv", # PortScan
-    "./data/Monday-WorkingHours.pcap_ISCX.csv",         # Benign only
+    "./data/Friday-WorkingHours-Morning.pcap_ISCX.csv",
+    "./data/Monday-WorkingHours.pcap_ISCX.csv",
 ]
-file_path = "../test/data/Friday-WorkingHours-Afternoon-PortScan.pcap_ISCX.csv"
 
-df = pd.read_csv(file_path)
-df.columns = df.columns.str.strip()
+dfs = []
+for f in dataset_files:
+    if os.path.exists(f):
+        tmp = pd.read_csv(f, low_memory=False)
+        tmp.columns = tmp.columns.str.strip()
+        dfs.append(tmp)
+        print(f"  Loaded {f}  ({len(tmp):,} rows)")
+    else:
+        print(f"  [SKIP] not found: {f}")
 
-print(f"Full dataset: {len(df):,} rows")
+if not dfs:
+    raise FileNotFoundError("No dataset files found. Check the paths in dataset_files.")
+
+df = pd.concat(dfs, ignore_index=True)
+print(f"\nFull dataset: {len(df):,} rows")
 print(f"Class distribution:\n{df['Label'].value_counts()}\n")
 
 # ────────────────────────────────────────────
@@ -49,7 +59,12 @@ attack_ratio = y_binary.mean()
 print(f"  Attack ratio: {attack_ratio:.2%}\n")
 
 # ────────────────────────────────────────────
-# 3. CLEAN INFINITIES AND NaNs
+# 3. KEEP ONLY NUMERIC COLUMNS
+# ────────────────────────────────────────────
+X = X.select_dtypes(include=[np.number])
+
+# ────────────────────────────────────────────
+# 4. CLEAN INFINITIES AND NaNs
 # ────────────────────────────────────────────
 X = X.replace([np.inf, -np.inf], np.nan)
 nan_counts = X.isnull().sum()
@@ -60,13 +75,13 @@ X = X.fillna(X.median(numeric_only=True))
 print()
 
 # ────────────────────────────────────────────
-# 4. STANDARDIZE FEATURES
+# 5. STANDARDIZE FEATURES
 # ────────────────────────────────────────────
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 
 # ────────────────────────────────────────────
-# 5. AUTOENCODER SETUP
+# 6. AUTOENCODER SETUP
 #    Train on BENIGN traffic only
 #    Uses validation split + early stopping
 # ────────────────────────────────────────────
@@ -74,7 +89,7 @@ normal_mask = (y_binary == 0).values
 X_normal = X_scaled[normal_mask]
 
 # Cap training samples for efficiency
-MAX_TRAINING_SAMPLES = 20_000
+MAX_TRAINING_SAMPLES = 50_000
 if X_normal.shape[0] > MAX_TRAINING_SAMPLES:
     idx = np.random.choice(X_normal.shape[0], MAX_TRAINING_SAMPLES, replace=False)
     X_normal_capped = X_normal[idx]
@@ -88,14 +103,14 @@ X_normal_train, X_normal_val = train_test_split(
 )
 
 X_tensor_train = torch.tensor(X_normal_train, dtype=torch.float32)
-X_tensor_val   = torch.tensor(X_normal_val,   dtype=torch.float32)
+X_tensor_val = torch.tensor(X_normal_val, dtype=torch.float32)
 
-dataset    = TensorDataset(X_tensor_train)
+dataset = TensorDataset(X_tensor_train)
 dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
 
 
 # ────────────────────────────────────────────
-# 6. MODEL DEFINITION
+# 7. MODEL DEFINITION
 # ────────────────────────────────────────────
 class Autoencoder(nn.Module):
     def __init__(self, input_dim):
@@ -106,7 +121,7 @@ class Autoencoder(nn.Module):
             nn.Dropout(0.2),
             nn.Linear(64, 32),
             nn.ReLU(),
-            nn.Linear(32, 16)   # tight bottleneck
+            nn.Linear(32, 16)
         )
         self.decoder = nn.Sequential(
             nn.Linear(16, 32),
@@ -122,7 +137,7 @@ class Autoencoder(nn.Module):
 
 
 input_dim = X_scaled.shape[1]
-model     = Autoencoder(input_dim)
+model = Autoencoder(input_dim)
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 criterion = nn.MSELoss()
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -130,15 +145,15 @@ scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
 )
 
 # ────────────────────────────────────────────
-# 7. TRAINING LOOP WITH EARLY STOPPING
+# 8. TRAINING LOOP WITH EARLY STOPPING
 # ────────────────────────────────────────────
-num_epochs      = 100
-best_val_loss   = float('inf')
-patience        = 8
+num_epochs = 100
+best_val_loss = float('inf')
+patience = 8
 patience_counter = 0
 best_model_state = None
-train_losses    = []
-val_losses      = []
+train_losses = []
+val_losses = []
 
 print("Training Autoencoder...")
 start_time = time.time()
@@ -149,9 +164,9 @@ for epoch in range(num_epochs):
     model.train()
     epoch_loss = 0
     for batch in dataloader:
-        inputs  = batch[0]
+        inputs = batch[0]
         outputs = model(inputs)
-        loss    = criterion(outputs, inputs)
+        loss = criterion(outputs, inputs)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -163,7 +178,7 @@ for epoch in range(num_epochs):
     # ── Validation pass ──
     model.eval()
     with torch.no_grad():
-        val_out  = model(X_tensor_val)
+        val_out = model(X_tensor_val)
         val_loss = criterion(val_out, X_tensor_val).item()
     val_losses.append(val_loss)
 
@@ -172,7 +187,7 @@ for epoch in range(num_epochs):
 
     # ── Early stopping check ──
     if val_loss < best_val_loss:
-        best_val_loss    = val_loss
+        best_val_loss = val_loss
         best_model_state = {k: v.clone() for k, v in model.state_dict().items()}
         patience_counter = 0
     else:
@@ -195,7 +210,7 @@ ae_training_time = time.time() - start_time
 print(f"Autoencoder training time: {ae_training_time:.2f}s\n")
 
 # ────────────────────────────────────────────
-# 8. INFERENCE — reconstruction errors
+# 9. INFERENCE — reconstruction errors
 # ────────────────────────────────────────────
 model.eval()
 X_tensor_full = torch.tensor(X_scaled, dtype=torch.float32)
@@ -205,16 +220,13 @@ with torch.no_grad():
 
 # Threshold based on actual attack ratio in data
 ae_threshold = np.percentile(errors, (1 - attack_ratio) * 100)
-ae_preds     = (errors > ae_threshold).astype(int)
+ae_preds = (errors > ae_threshold).astype(int)
 
 # ────────────────────────────────────────────
 # SAVE TRAINED MODEL + PREPROCESSING OBJECTS
 # ────────────────────────────────────────────
-
-#Create artifacts directory if it doesn't exist
 os.makedirs("./artifacts", exist_ok=True)
 
-# Save model state dict, scaler, threshold, and feature columns for live scoring
 torch.save(model.state_dict(), "./artifacts/autoencoder_model.pth")
 joblib.dump(scaler, "./artifacts/scaler.pkl")
 joblib.dump(ae_threshold, "./artifacts/threshold.pkl")
@@ -223,7 +235,7 @@ joblib.dump(X.columns.tolist(), "./artifacts/feature_columns.pkl")
 print("Saved model, scaler, threshold, and feature columns.")
 
 # ────────────────────────────────────────────
-# 9. EVALUATION & STATS
+# 10. EVALUATION & STATS
 # ────────────────────────────────────────────
 TARGET_NAMES = ["Benign", "Attack"]
 
@@ -234,7 +246,7 @@ print(classification_report(y_binary, ae_preds, target_names=TARGET_NAMES, zero_
 
 auc = roc_auc_score(y_binary, errors)
 print(f"ROC AUC Score : {auc:.4f}")
-print(f"Threshold used: {ae_threshold:.6f}  (at {(1 - attack_ratio)*100:.1f}th percentile)\n")
+print(f"Threshold used: {ae_threshold:.6f}  (at {(1 - attack_ratio) * 100:.1f}th percentile)\n")
 
 # Per-attack-type breakdown
 print("=" * 52)
@@ -245,26 +257,27 @@ print("-" * 52)
 
 attack_types = df[df["Label"] != "BENIGN"]["Label"].unique()
 for attack in sorted(attack_types):
-    mask     = (df["Label"].values == attack)
+    mask = (df["Label"].values == attack)
     X_attack = X_scaled[mask]
     attack_tensor = torch.tensor(X_attack, dtype=torch.float32)
     with torch.no_grad():
-        recon         = model(attack_tensor)
+        recon = model(attack_tensor)
         attack_errors = torch.mean((attack_tensor - recon) ** 2, dim=1).numpy()
     detected = (attack_errors > ae_threshold).sum()
-    total    = mask.sum()
-    print(f"{attack:<25} {detected:>10,} {total:>8,} {detected/total:>7.1%}")
+    total = mask.sum()
+    print(f"{attack:<25} {detected:>10,} {total:>8,} {detected / total:>7.1%}")
 
 print("-" * 52)
 
 # ────────────────────────────────────────────
-# 10. VISUALIZATIONS
+# 11. VISUALIZATIONS
 # ────────────────────────────────────────────
+os.makedirs("./diagrams", exist_ok=True)
 
 # ── A. Training Loss Curve ──
 plt.figure(figsize=(8, 4))
 plt.plot(train_losses, label="Train Loss", color="blue", lw=2)
-plt.plot(val_losses,   label="Val Loss",   color="orange", lw=2)
+plt.plot(val_losses, label="Val Loss", color="orange", lw=2)
 early_stop_epoch = len(val_losses) - patience_counter - 1
 plt.axvline(early_stop_epoch, color="red", linestyle="--", label="Early Stop Point")
 plt.xlabel("Epoch")

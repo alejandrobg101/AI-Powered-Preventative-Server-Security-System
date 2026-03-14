@@ -4,6 +4,7 @@ import torch.nn as nn
 import numpy as np
 import joblib
 
+
 # Same model architecture as training
 class Autoencoder(nn.Module):
     def __init__(self, input_dim):
@@ -60,9 +61,9 @@ def score_live_vector(feature_vector):
 
     return error, prediction
 
-#Use this block to test the live scoring function with a sample row from the dataset. Make sure to update the file path and row number as needed.
-if __name__ == "__main__":
 
+# Use this block to test the live scoring function with a sample row from the dataset. Make sure to update the file path and row number as needed.
+if __name__ == "__main__":
     file_path = "../test/data/Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv"
 
     df = pd.read_csv(file_path)
