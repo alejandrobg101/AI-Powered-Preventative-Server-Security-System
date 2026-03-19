@@ -49,6 +49,23 @@ print(f"Class distribution:\n{df['Label'].value_counts()}\n")
 X = df.drop("Label", axis=1)
 y = df["Label"]
 
+# DROP features that are systematically different in live traffic ──
+# TCP window sizes depend on OS defaults (65535 modern vs ~7000 in 2017)
+# Flag binary encoding differs between CICFlowMeter and live capture
+FEATURES_TO_DROP = [
+    "Init_Win_bytes_forward",
+    "Init_Win_bytes_backward",
+    "Fwd PSH Flags",
+    "Bwd PSH Flags",
+    "Fwd URG Flags",
+    "Bwd URG Flags",
+    "FIN Flag Count",
+    "SYN Flag Count",
+    "RST Flag Count",
+]
+X = X.drop(columns=[c for c in FEATURES_TO_DROP if c in X.columns])
+print(f"Dropped {len(FEATURES_TO_DROP)} unstable features. Remaining: {X.shape[1]}")
+
 # Binary labels: 0 = BENIGN, 1 = ANY attack
 y_binary = (y != "BENIGN").astype(int)
 
