@@ -1,6 +1,6 @@
 """
 diagnose_features.py
-────────────────────
+----------
 Run this BEFORE live_capture.py to understand why the autoencoder
 is flagging everything as an attack.
 
@@ -27,9 +27,9 @@ import joblib
 
 from scapy.all import sniff, IP, TCP, UDP, conf
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # AUTOENCODER  (must match training architecture exactly)
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 class Autoencoder(nn.Module):
     def __init__(self, input_dim: int):
         super().__init__()
@@ -48,9 +48,9 @@ class Autoencoder(nn.Module):
         return self.decoder(self.encoder(x))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # LOAD ARTIFACTS
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 feature_columns: list = joblib.load("artifacts/feature_columns.pkl")
 scaler          = joblib.load("artifacts/scaler.pkl")
 threshold       = joblib.load("artifacts/threshold.pkl")
@@ -78,9 +78,9 @@ FLOW_TIMEOUT = 120.0
 IAT_WINDOW   = 100
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # FLOW KEY
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 def flow_key(pkt) -> tuple | None:
     if not pkt.haslayer(IP):
         return None
@@ -97,9 +97,9 @@ def flow_key(pkt) -> tuple | None:
     return (ip.dst, ip.src, dp, sp, proto)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # FLOW STATS  (same as live_capture.py)
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 class FlowStats:
     def __init__(self, key, first_pkt, ts):
         self.key        = key
@@ -324,9 +324,9 @@ class FlowStats:
         }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # DIAGNOSTIC SCORING
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 def diagnose_flow(key, flow):
     fv   = flow.to_feature_vector()
     row  = {col: fv.get(col, 0.0) for col in feature_columns}
@@ -389,9 +389,9 @@ def diagnose_flow(key, flow):
         print(f"  {fname:<45} {ferr:>15.6f}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # FLOW TABLE
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 class FlowTable:
     def __init__(self, flush_cb, min_pkts=4):
         self._flows   = {}
@@ -433,9 +433,9 @@ class FlowTable:
             self._flows.clear()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # MAIN
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 def main():
     parser = argparse.ArgumentParser(description="Diagnose feature mismatch in live traffic")
     parser.add_argument("--iface",   default=conf.iface)

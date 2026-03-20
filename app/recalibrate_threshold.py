@@ -1,6 +1,6 @@
 """
 recalibrate_threshold.py
-────────────────────────
+------------
 Sniffs your live network for a window of KNOWN-GOOD traffic,
 computes reconstruction errors on those flows, and saves a new
 threshold to artifacts/threshold.pkl.
@@ -31,9 +31,9 @@ FLOW_TIMEOUT = 120.0
 IAT_WINDOW   = 100
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # AUTOENCODER
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 class Autoencoder(nn.Module):
     def __init__(self, input_dim: int):
         super().__init__()
@@ -52,9 +52,9 @@ class Autoencoder(nn.Module):
         return self.decoder(self.encoder(x))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # LOAD ARTIFACTS
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 feature_columns: list = joblib.load("artifacts/feature_columns.pkl")
 scaler          = joblib.load("artifacts/scaler.pkl")
 old_threshold   = joblib.load("artifacts/threshold.pkl")
@@ -73,9 +73,9 @@ print("  Browse normally while this runs — it will learn what")
 print("  YOUR traffic looks like and set a proper threshold.\n")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # FLOW KEY
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 def flow_key(pkt) -> tuple | None:
     if not pkt.haslayer(IP):
         return None
@@ -92,9 +92,9 @@ def flow_key(pkt) -> tuple | None:
     return (ip.dst, ip.src, dp, sp, proto)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # FLOW STATS
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 class FlowStats:
     def __init__(self, key, first_pkt, ts):
         self.key         = key
@@ -280,9 +280,9 @@ class FlowStats:
         }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # FLOW TABLE
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 live_errors: list[float] = []
 
 
@@ -343,9 +343,9 @@ class FlowTable:
             self._flows.clear()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # MAIN
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--iface",      default=conf.iface)
