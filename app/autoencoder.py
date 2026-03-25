@@ -12,9 +12,9 @@ import time
 import os
 import joblib
 
-# ────────────────────────────────────────────
+# ----------------------
 # 1. LOAD DATASET  — all 8 files
-# ────────────────────────────────────────────
+# ----------------------
 dataset_files = [
     "./data/Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv",
     "./data/Friday-WorkingHours-Afternoon-PortScan.pcap_ISCX.csv",
@@ -43,11 +43,28 @@ df = pd.concat(dfs, ignore_index=True)
 print(f"\nFull dataset: {len(df):,} rows")
 print(f"Class distribution:\n{df['Label'].value_counts()}\n")
 
-# ────────────────────────────────────────────
+# ----------------------
 # 2. SEPARATE FEATURES AND LABELS
-# ────────────────────────────────────────────
+# ----------------------
 X = df.drop("Label", axis=1)
 y = df["Label"]
+
+# DROP features that are systematically different in live traffic ─
+# TCP window sizes depend on OS defaults (65535 modern vs ~7000 in 2017)
+# Flag binary encoding differs between CICFlowMeter and live capture
+FEATURES_TO_DROP = [
+    "Init_Win_bytes_forward",
+    "Init_Win_bytes_backward",
+    "Fwd PSH Flags",
+    "Bwd PSH Flags",
+    "Fwd URG Flags",
+    "Bwd URG Flags",
+    "FIN Flag Count",
+    "SYN Flag Count",
+    "RST Flag Count",
+]
+X = X.drop(columns=[c for c in FEATURES_TO_DROP if c in X.columns])
+print(f"Dropped {len(FEATURES_TO_DROP)} unstable features. Remaining: {X.shape[1]}")
 
 # Binary labels: 0 = BENIGN, 1 = ANY attack
 y_binary = (y != "BENIGN").astype(int)
@@ -58,14 +75,14 @@ print(f"  Attack (1): {(y_binary == 1).sum():,}")
 attack_ratio = y_binary.mean()
 print(f"  Attack ratio: {attack_ratio:.2%}\n")
 
-# ────────────────────────────────────────────
+# ----------------------
 # 3. KEEP ONLY NUMERIC COLUMNS
-# ────────────────────────────────────────────
+# ----------------------
 X = X.select_dtypes(include=[np.number])
 
-# ────────────────────────────────────────────
+# ----------------------
 # 4. CLEAN INFINITIES AND NaNs
-# ────────────────────────────────────────────
+# ----------------------
 X = X.replace([np.inf, -np.inf], np.nan)
 nan_counts = X.isnull().sum()
 if nan_counts.any():
@@ -74,17 +91,17 @@ if nan_counts.any():
 X = X.fillna(X.median(numeric_only=True))
 print()
 
-# ────────────────────────────────────────────
+# ----------------------
 # 5. STANDARDIZE FEATURES
-# ────────────────────────────────────────────
+# ----------------------
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 
-# ────────────────────────────────────────────
+# ----------------------
 # 6. AUTOENCODER SETUP
 #    Train on BENIGN traffic only
 #    Uses validation split + early stopping
-# ────────────────────────────────────────────
+# ----------------------
 normal_mask = (y_binary == 0).values
 X_normal = X_scaled[normal_mask]
 
@@ -109,9 +126,9 @@ dataset = TensorDataset(X_tensor_train)
 dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
 
 
-# ────────────────────────────────────────────
+# ----------------------
 # 7. MODEL DEFINITION
-# ────────────────────────────────────────────
+# ----------------------
 class Autoencoder(nn.Module):
     def __init__(self, input_dim):
         super(Autoencoder, self).__init__()
@@ -144,9 +161,9 @@ scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
     optimizer, mode='min', factor=0.5, patience=3
 )
 
-# ────────────────────────────────────────────
+# ----------------------
 # 8. TRAINING LOOP WITH EARLY STOPPING
-# ────────────────────────────────────────────
+# ----------------------
 num_epochs = 100
 best_val_loss = float('inf')
 patience = 8
@@ -160,7 +177,7 @@ start_time = time.time()
 
 for epoch in range(num_epochs):
 
-    # ── Training pass ──
+    # - Training pass -
     model.train()
     epoch_loss = 0
     for batch in dataloader:
@@ -175,17 +192,17 @@ for epoch in range(num_epochs):
     avg_train_loss = epoch_loss / len(dataloader)
     train_losses.append(avg_train_loss)
 
-    # ── Validation pass ──
+    # - Validation pass -
     model.eval()
     with torch.no_grad():
         val_out = model(X_tensor_val)
         val_loss = criterion(val_out, X_tensor_val).item()
     val_losses.append(val_loss)
 
-    # ── LR scheduler step ──
+    # - LR scheduler step -
     scheduler.step(val_loss)
 
-    # ── Early stopping check ──
+    # - Early stopping check -
     if val_loss < best_val_loss:
         best_val_loss = val_loss
         best_model_state = {k: v.clone() for k, v in model.state_dict().items()}
@@ -209,9 +226,9 @@ model.load_state_dict(best_model_state)
 ae_training_time = time.time() - start_time
 print(f"Autoencoder training time: {ae_training_time:.2f}s\n")
 
-# ────────────────────────────────────────────
+# ----------------------
 # 9. INFERENCE — reconstruction errors
-# ────────────────────────────────────────────
+# ----------------------
 model.eval()
 X_tensor_full = torch.tensor(X_scaled, dtype=torch.float32)
 with torch.no_grad():
@@ -222,9 +239,9 @@ with torch.no_grad():
 ae_threshold = np.percentile(errors, (1 - attack_ratio) * 100)
 ae_preds = (errors > ae_threshold).astype(int)
 
-# ────────────────────────────────────────────
+# ----------------------
 # SAVE TRAINED MODEL + PREPROCESSING OBJECTS
-# ────────────────────────────────────────────
+# ----------------------
 os.makedirs("./artifacts", exist_ok=True)
 
 torch.save(model.state_dict(), "./artifacts/autoencoder_model.pth")
@@ -234,9 +251,9 @@ joblib.dump(X.columns.tolist(), "./artifacts/feature_columns.pkl")
 
 print("Saved model, scaler, threshold, and feature columns.")
 
-# ────────────────────────────────────────────
+# ----------------------
 # 10. EVALUATION & STATS
-# ────────────────────────────────────────────
+# ----------------------
 TARGET_NAMES = ["Benign", "Attack"]
 
 print("=" * 52)
@@ -269,12 +286,12 @@ for attack in sorted(attack_types):
 
 print("-" * 52)
 
-# ────────────────────────────────────────────
+# ----------------------
 # 11. VISUALIZATIONS
-# ────────────────────────────────────────────
+# ----------------------
 os.makedirs("./diagrams", exist_ok=True)
 
-# ── A. Training Loss Curve ──
+# - A. Training Loss Curve -
 plt.figure(figsize=(8, 4))
 plt.plot(train_losses, label="Train Loss", color="blue", lw=2)
 plt.plot(val_losses, label="Val Loss", color="orange", lw=2)
@@ -289,7 +306,7 @@ plt.savefig("./diagrams/ae_loss_curve.png", dpi=150)
 plt.show()
 print("Saved: ae_loss_curve.png")
 
-# ── B. Confusion Matrix ──
+# - B. Confusion Matrix -
 cm = confusion_matrix(y_binary, ae_preds)
 plt.figure(figsize=(5, 4))
 sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
@@ -302,7 +319,7 @@ plt.savefig("./diagrams/ae_confusion_matrix.png", dpi=150)
 plt.show()
 print("Saved: ae_confusion_matrix.png")
 
-# ── C. ROC Curve ──
+# - C. ROC Curve -
 fpr, tpr, _ = roc_curve(y_binary, errors)
 plt.figure(figsize=(7, 5))
 plt.plot(fpr, tpr, color="blue", lw=2, label=f"Autoencoder (AUC = {auc:.4f})")
@@ -316,7 +333,7 @@ plt.savefig("./diagrams/ae_roc_curve.png", dpi=150)
 plt.show()
 print("Saved: ae_roc_curve.png")
 
-# ── D. Reconstruction Error Distribution ──
+# - D. Reconstruction Error Distribution -
 plt.figure(figsize=(8, 4))
 plt.hist(errors[y_binary == 0], bins=80, alpha=0.6,
          label="Benign", color="blue", density=True)

@@ -16,9 +16,9 @@ from scapy.all import (
 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # AUTOENCODER  (must match training architecture exactly)
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 class Autoencoder(nn.Module):
     def __init__(self, input_dim: int):
         super().__init__()
@@ -37,9 +37,9 @@ class Autoencoder(nn.Module):
         return self.decoder(self.encoder(x))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # LOAD ARTIFACTS
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 feature_columns: list = joblib.load("artifacts/feature_columns.pkl")
 scaler = joblib.load("artifacts/scaler.pkl")
 threshold: float = joblib.load("artifacts/threshold.pkl")
@@ -59,9 +59,9 @@ for fname in flag_features:
         print(f"  {fname:<30}  mean={scaler.mean_[idx]:.4f}  std={scaler.scale_[idx]:.4f}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # FLOW KEY  (5-tuple, direction-normalised so fwd/bwd are consistent)
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 def flow_key(pkt) -> tuple | None:
     """Return a canonical (src_ip, dst_ip, src_port, dst_port, proto) tuple."""
     if not pkt.haslayer(IP):
@@ -82,9 +82,9 @@ def flow_key(pkt) -> tuple | None:
     return (ip.dst, ip.src, dp, sp, proto)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # PER-FLOW STATISTICS ACCUMULATOR
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 FLOW_TIMEOUT = 120.0  # seconds of inactivity before a flow is flushed
 IAT_WINDOW = 100  # keep last N inter-arrival times
 
@@ -137,7 +137,7 @@ class FlowStats:
 
         self._add_packet(first_pkt, ts, forward=True)
 
-    # ── helpers ──────────────────────────────────────────────────────────────
+    # - helpers -------------------------------
 
     @staticmethod
     def _tcp_flags(pkt) -> dict:
@@ -171,7 +171,7 @@ class FlowStats:
             return 8 + 20
         return 20
 
-    # ── packet ingestion ─────────────────────────────────────────────────────
+    # - packet ingestion --------------------------─
 
     def _add_packet(self, pkt, ts: float, forward: bool):
         plen = self._ip_len(pkt)
@@ -232,7 +232,7 @@ class FlowStats:
         forward = (src_ip == self.key[0])
         self._add_packet(pkt, ts, forward)
 
-    # ── statistical helpers ───────────────────────────────────────────────────
+    # - statistical helpers -------------------------─
 
     @staticmethod
     def _stats(lst: list) -> dict:
@@ -247,7 +247,7 @@ class FlowStats:
             'min': float(a.min()),
         }
 
-    # ── feature vector ────────────────────────────────────────────────────────
+    # - feature vector ----------------------------
 
     def to_feature_vector(self) -> dict:
         """
@@ -297,7 +297,7 @@ class FlowStats:
         sf_bwd_bytes = bwd_bulk_bytes
 
         fv = {
-            # ── basic packet/byte counts ──────────────────────────────────
+            # - basic packet/byte counts -----------------
             "Destination Port": self.key[3],
             "Flow Duration": duration_us,
             "Total Fwd Packets": self.fwd_pkts,
@@ -305,7 +305,7 @@ class FlowStats:
             "Total Length of Fwd Packets": fwd_bulk_bytes,
             "Total Length of Bwd Packets": bwd_bulk_bytes,
 
-            # ── per-direction packet-length stats ─────────────────────────
+            # - per-direction packet-length stats ------------─
             "Fwd Packet Length Max": fwd_b['max'],
             "Fwd Packet Length Min": fwd_b['min'],
             "Fwd Packet Length Mean": fwd_b['mean'],
@@ -315,11 +315,11 @@ class FlowStats:
             "Bwd Packet Length Mean": bwd_b['mean'],
             "Bwd Packet Length Std": bwd_b['std'],
 
-            # ── throughput ────────────────────────────────────────────────
+            # - throughput ------------------------
             "Flow Bytes/s": flow_bytes_s,
             "Flow Packets/s": flow_pkts_s,
 
-            # ── inter-arrival times (µs like CIC-IDS2017) ────────────────
+            # - inter-arrival times (µs like CIC-IDS2017) --------
             "Flow IAT Mean": flow_i['mean'] * 1e6,
             "Flow IAT Std": flow_i['std'] * 1e6,
             "Flow IAT Max": flow_i['max'] * 1e6,
@@ -335,7 +335,7 @@ class FlowStats:
             "Bwd IAT Max": bwd_i['max'] * 1e6,
             "Bwd IAT Min": bwd_i['min'] * 1e6,
 
-            # ── TCP flags ─────────────────────────────────────────────────
+            # - TCP flags ------------------------─
             # CICFlowMeter records whether a flag was ever seen (0 or 1),
             # not the total count per packet. Binary encoding matches training.
             "Fwd PSH Flags": 1 if self.fwd_psh else 0,
@@ -351,16 +351,16 @@ class FlowStats:
             "CWE Flag Count": 0,
             "ECE Flag Count": 0,
 
-            # ── header lengths ────────────────────────────────────────────
+            # - header lengths ----------------------
             "Fwd Header Length": sum(self.fwd_header_lens),
             "Bwd Header Length": sum(self.bwd_header_lens),
             "Fwd Header Length.1": sum(self.fwd_header_lens),  # duplicate col in dataset
 
-            # ── pkt/s per direction ───────────────────────────────────────
+            # - pkt/s per direction -------------------─
             "Fwd Packets/s": fwd_pkts_s,
             "Bwd Packets/s": bwd_pkts_s,
 
-            # ── overall packet-length stats ───────────────────────────────
+            # - overall packet-length stats ---------------─
             "Min Packet Length": min(self.fwd_bytes + self.bwd_bytes) if (self.fwd_bytes or self.bwd_bytes) else 0,
             "Max Packet Length": max(self.fwd_bytes + self.bwd_bytes) if (self.fwd_bytes or self.bwd_bytes) else 0,
             "Packet Length Mean": np.mean(self.fwd_bytes + self.bwd_bytes) if (
@@ -369,13 +369,13 @@ class FlowStats:
             "Packet Length Variance": np.var(self.fwd_bytes + self.bwd_bytes) if (
                         self.fwd_bytes or self.bwd_bytes) else 0.0,
 
-            # ── ratios / misc ─────────────────────────────────────────────
+            # - ratios / misc ----------------------─
             "Down/Up Ratio": down_up,
             "Average Packet Size": avg_seg,
             "Avg Fwd Segment Size": fwd_seg_avg,
             "Avg Bwd Segment Size": bwd_seg_avg,
 
-            # ── bulk / subflow ────────────────────────────────────────────
+            # - bulk / subflow ----------------------
             # NOTE: CICFlowMeter bulk detection requires tracking multi-packet
             # bursts with specific thresholds. Zeroing these out is more accurate
             # than a wrong approximation, since the scaler was fit on near-zero values.
@@ -390,13 +390,13 @@ class FlowStats:
             "Subflow Bwd Packets": sf_bwd_pkts,
             "Subflow Bwd Bytes": sf_bwd_bytes,
 
-            # ── window / segment sizes ────────────────────────────────────
+            # - window / segment sizes ------------------
             "Init_Win_bytes_forward": self.init_fwd_win,
             "Init_Win_bytes_backward": self.init_bwd_win,
             "act_data_pkt_fwd": self.fwd_pkts,  # pkts with payload
             "min_seg_size_forward": fwd_b['min'],
 
-            # ── active / idle (µs like CIC-IDS2017) ──────────────────────
+            # - active / idle (µs like CIC-IDS2017) -----------
             "Active Mean": act['mean'] * 1e6,
             "Active Std": act['std'] * 1e6,
             "Active Max": act['max'] * 1e6,
@@ -410,9 +410,9 @@ class FlowStats:
         return fv
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # FLOW TABLE
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 class FlowTable:
     """Thread-safe dictionary of active FlowStats objects."""
 
@@ -464,9 +464,9 @@ class FlowTable:
             self._flows.clear()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # SCORING
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 DEBUG = False  # set via --debug flag; prints per-feature scaled values
 
 
@@ -507,9 +507,9 @@ def score_flow(key: tuple, flow: FlowStats):
             print(f"    {fname:<40}  raw={raw:>15.4f}  scaled={sval:>10.4f}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # PERIODIC TIMEOUT FLUSHER
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 class TimeoutFlusher(threading.Thread):
     """Background thread that evicts timed-out flows every `interval` seconds."""
 
@@ -534,9 +534,9 @@ class TimeoutFlusher(threading.Thread):
         self._stop_evt.set()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 # MAIN
-# ─────────────────────────────────────────────────────────────────────────────
+# --------------------------------------─
 def main():
     parser = argparse.ArgumentParser(description="Live IDS capture with autoencoder scoring")
     parser.add_argument("--iface", default=conf.iface, help="Network interface to sniff on")
