@@ -10,6 +10,12 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import time
 import numpy as np
+
+TARGET_BENIGN_FPR = 0.10
+SEED = 42
+
+np.random.seed(SEED)
+torch.manual_seed(SEED)
 # ────────────────────────────────────────────
 # 1. LOAD DATASET
 # ────────────────────────────────────────────
@@ -147,6 +153,32 @@ scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
     optimizer, mode='min', factor=0.5, patience=3
 )
 
+
+def reconstruction_errors(model, features):
+    tensor = torch.tensor(features, dtype=torch.float32)
+    with torch.no_grad():
+        reconstructed = model(tensor)
+        return torch.mean((tensor - reconstructed) ** 2, dim=1).cpu().numpy()
+
+
+def calibrate_threshold_for_max_fpr(benign_errors, max_false_positive_rate):
+    if not 0 <= max_false_positive_rate < 1:
+        raise ValueError("max_false_positive_rate must be in [0, 1).")
+
+    benign_errors = np.sort(np.asarray(benign_errors, dtype=float))
+    if benign_errors.size == 0:
+        raise ValueError("Need at least one benign reconstruction error to calibrate.")
+
+    allowed_false_positives = int(np.floor(max_false_positive_rate * benign_errors.size))
+    if allowed_false_positives == 0:
+        threshold = float(np.nextafter(benign_errors[-1], np.inf))
+    else:
+        threshold_index = max(0, benign_errors.size - allowed_false_positives - 1)
+        threshold = float(benign_errors[threshold_index])
+
+    achieved_fpr = float(np.mean(benign_errors > threshold))
+    return threshold, achieved_fpr
+
 num_epochs = 100
 best_val_loss = float('inf')
 patience = 8
@@ -211,14 +243,15 @@ print(f"Autoencoder training time: {ae_training_time:.2f}s\n")
 
 # ── Reconstruction errors on full dataset ──
 model.eval()
-X_tensor_full = torch.tensor(X_scaled, dtype=torch.float32)
-with torch.no_grad():
-    reconstructed = model(X_tensor_full)
-    errors = torch.mean((X_tensor_full - reconstructed) ** 2, dim=1).numpy()
+val_errors = reconstruction_errors(model, X_normal_val)
+ae_threshold, ae_calibration_fpr = calibrate_threshold_for_max_fpr(
+    val_errors,
+    TARGET_BENIGN_FPR,
+)
 
-# Threshold based on actual attack ratio
-ae_threshold = np.percentile(errors, (1 - attack_ratio) * 100)
+errors = reconstruction_errors(model, X_scaled)
 ae_preds = (errors > ae_threshold).astype(int)
+ae_full_benign_fpr = float(np.mean(errors[y_binary == 0] > ae_threshold))
 
 # ────────────────────────────────────────────
 # 8. ISOLATION FOREST
@@ -288,6 +321,12 @@ def print_results(name, y_true, y_pred, y_score):
 
 
 ae_auc = print_results("AUTOENCODER (Unsupervised)", y_binary, ae_preds, errors)
+print(
+    f"Autoencoder threshold: {ae_threshold:.6f} "
+    f"(target benign FPR <= {TARGET_BENIGN_FPR:.0%}; "
+    f"validation FPR={ae_calibration_fpr:.2%}; "
+    f"full benign FPR={ae_full_benign_fpr:.2%})\n"
+)
 iso_auc = print_results("ISOLATION FOREST (Unsupervised)", y_binary, iso_preds, iso_scores)
 rf_auc = print_results("RANDOM FOREST (Supervised)", y_test_rf, rf_preds, rf_probs)
 
