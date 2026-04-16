@@ -12,6 +12,12 @@ import time
 import os
 import joblib
 
+TARGET_BENIGN_FPR = 0.10
+SEED = 42
+
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+
 # ----------------------
 # 1. LOAD DATASET  — all 8 files
 # ----------------------
@@ -161,6 +167,32 @@ scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
     optimizer, mode='min', factor=0.5, patience=3
 )
 
+
+def reconstruction_errors(model, features):
+    tensor = torch.tensor(features, dtype=torch.float32)
+    with torch.no_grad():
+        reconstructed = model(tensor)
+        return torch.mean((tensor - reconstructed) ** 2, dim=1).cpu().numpy()
+
+
+def calibrate_threshold_for_max_fpr(benign_errors, max_false_positive_rate):
+    if not 0 <= max_false_positive_rate < 1:
+        raise ValueError("max_false_positive_rate must be in [0, 1).")
+
+    benign_errors = np.sort(np.asarray(benign_errors, dtype=float))
+    if benign_errors.size == 0:
+        raise ValueError("Need at least one benign reconstruction error to calibrate.")
+
+    allowed_false_positives = int(np.floor(max_false_positive_rate * benign_errors.size))
+    if allowed_false_positives == 0:
+        threshold = float(np.nextafter(benign_errors[-1], np.inf))
+    else:
+        threshold_index = max(0, benign_errors.size - allowed_false_positives - 1)
+        threshold = float(benign_errors[threshold_index])
+
+    achieved_fpr = float(np.mean(benign_errors > threshold))
+    return threshold, achieved_fpr
+
 # ----------------------
 # 8. TRAINING LOOP WITH EARLY STOPPING
 # ----------------------
@@ -230,14 +262,15 @@ print(f"Autoencoder training time: {ae_training_time:.2f}s\n")
 # 9. INFERENCE — reconstruction errors
 # ----------------------
 model.eval()
-X_tensor_full = torch.tensor(X_scaled, dtype=torch.float32)
-with torch.no_grad():
-    reconstructed = model(X_tensor_full)
-    errors = torch.mean((X_tensor_full - reconstructed) ** 2, dim=1).numpy()
+val_errors = reconstruction_errors(model, X_normal_val)
+ae_threshold, calibration_fpr = calibrate_threshold_for_max_fpr(
+    val_errors,
+    TARGET_BENIGN_FPR,
+)
 
-# Threshold based on actual attack ratio in data
-ae_threshold = np.percentile(errors, (1 - attack_ratio) * 100)
+errors = reconstruction_errors(model, X_scaled)
 ae_preds = (errors > ae_threshold).astype(int)
+full_benign_fpr = float(np.mean(errors[y_binary == 0] > ae_threshold))
 
 # ----------------------
 # SAVE TRAINED MODEL + PREPROCESSING OBJECTS
@@ -263,7 +296,12 @@ print(classification_report(y_binary, ae_preds, target_names=TARGET_NAMES, zero_
 
 auc = roc_auc_score(y_binary, errors)
 print(f"ROC AUC Score : {auc:.4f}")
-print(f"Threshold used: {ae_threshold:.6f}  (at {(1 - attack_ratio) * 100:.1f}th percentile)\n")
+print(
+    "Threshold used: "
+    f"{ae_threshold:.6f}  "
+    f"(calibrated on held-out benign traffic for <= {TARGET_BENIGN_FPR:.0%} FPR; "
+    f"validation FPR={calibration_fpr:.2%}, full benign FPR={full_benign_fpr:.2%})\n"
+)
 
 # Per-attack-type breakdown
 print("=" * 52)
