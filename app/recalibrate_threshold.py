@@ -29,6 +29,7 @@ from scapy.all import sniff, IP, TCP, UDP, conf
 
 FLOW_TIMEOUT = 120.0
 IAT_WINDOW   = 100
+DEFAULT_TARGET_BENIGN_FPR = 0.10
 
 
 # --------------------------------------─
@@ -286,6 +287,25 @@ class FlowStats:
 live_errors: list[float] = []
 
 
+def calibrate_threshold_for_max_fpr(benign_errors, max_false_positive_rate):
+    if not 0 <= max_false_positive_rate < 1:
+        raise ValueError("max_false_positive_rate must be in [0, 1).")
+
+    benign_errors = np.sort(np.asarray(benign_errors, dtype=float))
+    if benign_errors.size == 0:
+        raise ValueError("Need at least one benign reconstruction error to calibrate.")
+
+    allowed_false_positives = int(np.floor(max_false_positive_rate * benign_errors.size))
+    if allowed_false_positives == 0:
+        threshold = float(np.nextafter(benign_errors[-1], np.inf))
+    else:
+        threshold_index = max(0, benign_errors.size - allowed_false_positives - 1)
+        threshold = float(benign_errors[threshold_index])
+
+    achieved_fpr = float(np.mean(benign_errors > threshold))
+    return threshold, achieved_fpr
+
+
 def collect_error(key, flow):
     fv   = flow.to_feature_vector()
     row  = {col: fv.get(col, 0.0) for col in feature_columns}
@@ -351,12 +371,17 @@ def main():
     parser.add_argument("--iface",      default=conf.iface)
     parser.add_argument("--timeout",    type=int, default=120)
     parser.add_argument("--minpkts",    type=int, default=4)
-    parser.add_argument("--percentile", type=float, default=99.0,
-                        help="Set threshold at this percentile of live benign errors (default 99.0)")
+    parser.add_argument("--target-fpr", type=float, default=DEFAULT_TARGET_BENIGN_FPR,
+                        help="Maximum benign false-positive rate to allow when calibrating (default 0.10)")
+    parser.add_argument("--percentile", type=float, default=None,
+                        help="Legacy override: set threshold directly to this percentile of live benign errors")
     args = parser.parse_args()
 
     print(f"  Sniffing {args.iface} for {args.timeout}s...")
-    print(f"  Threshold percentile: {args.percentile}%\n")
+    if args.percentile is not None:
+        print(f"  Threshold mode      : percentile override ({args.percentile}%)\n")
+    else:
+        print(f"  Target benign FPR   : <= {args.target_fpr:.1%}\n")
 
     table = FlowTable(flush_cb=collect_error, min_pkts=args.minpkts)
 
@@ -373,13 +398,23 @@ def main():
         return
 
     errors = np.array(live_errors)
-    new_threshold = float(np.percentile(errors, args.percentile))
+    if args.percentile is not None:
+        new_threshold = float(np.percentile(errors, args.percentile))
+        achieved_fpr = float(np.mean(errors > new_threshold))
+        calibration_label = f"{args.percentile}th pct"
+    else:
+        new_threshold, achieved_fpr = calibrate_threshold_for_max_fpr(
+            errors,
+            args.target_fpr,
+        )
+        calibration_label = f"target benign FPR <= {args.target_fpr:.1%}"
 
     print(f"\n{'='*60}")
     print(f"  RECALIBRATION RESULTS  ({len(errors)} flows)")
     print(f"{'='*60}")
     print(f"  Old threshold : {old_threshold:.6f}")
-    print(f"  New threshold : {new_threshold:.6f}  ({args.percentile}th pct)")
+    print(f"  New threshold : {new_threshold:.6f}  ({calibration_label})")
+    print(f"  Achieved FPR  : {achieved_fpr:.2%}")
     print(f"  Error stats   : min={errors.min():.6f}  "
           f"p50={np.percentile(errors,50):.6f}  "
           f"p95={np.percentile(errors,95):.6f}  "
