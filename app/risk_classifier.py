@@ -1,0 +1,101 @@
+"""
+risk_classifier.py
+------------------
+Maps autoencoder reconstruction errors to a 4-level risk scale:
+  Low / Medium / High / Critical
+
+Thresholds are loaded from artifacts/risk_thresholds.pkl (saved by
+autoencoder.py at training time).  If that file is absent the module
+falls back to fixed multiples of the base threshold so it works even
+before the model is retrained.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+import joblib
+
+
+@dataclass(frozen=True)
+class RiskLevel:
+    name: str
+    code: int
+    label: str
+    suggested_response: str
+
+
+LOW = RiskLevel(
+    name="Low",
+    code=0,
+    label="O  Low     ",
+    suggested_response="No action required — traffic within normal parameters.",
+)
+MEDIUM = RiskLevel(
+    name="Medium",
+    code=1,
+    label="!  Medium  ",
+    suggested_response="Log and monitor — elevated reconstruction error, possible anomaly.",
+)
+HIGH = RiskLevel(
+    name="High",
+    code=2,
+    label="!! High    ",
+    suggested_response="Investigate — significant deviation from normal behaviour.",
+)
+CRITICAL = RiskLevel(
+    name="Critical",
+    code=3,
+    label="XX Critical",
+    suggested_response="Immediate response required — extreme anomaly detected.",
+)
+
+ALL_LEVELS: tuple[RiskLevel, ...] = (LOW, MEDIUM, HIGH, CRITICAL)
+
+
+def classify(error: float, thresholds: dict) -> RiskLevel:
+    """Return the RiskLevel for a given reconstruction error.
+
+    thresholds must contain keys 'medium', 'high', 'critical' which are the
+    lower bounds (exclusive) for each escalated tier.
+    """
+    if error <= thresholds["medium"]:
+        return LOW
+    if error <= thresholds["high"]:
+        return MEDIUM
+    if error <= thresholds["critical"]:
+        return HIGH
+    return CRITICAL
+
+
+def load_thresholds(artifacts_dir: str = "artifacts") -> dict:
+    """Load risk thresholds from disk; derive from base threshold if absent.
+
+    Returns a dict with keys 'medium', 'high', 'critical'.
+    """
+    path = os.path.join(artifacts_dir, "risk_thresholds.pkl")
+    if os.path.exists(path):
+        thresholds = joblib.load(path)
+        print(
+            f"[INFO] Risk thresholds loaded — "
+            f"medium={thresholds['medium']:.6f}  "
+            f"high={thresholds['high']:.6f}  "
+            f"critical={thresholds['critical']:.6f}"
+        )
+        return thresholds
+
+    # Fallback: derive from the base threshold using conservative multipliers
+    base = float(joblib.load(os.path.join(artifacts_dir, "threshold.pkl")))
+    thresholds = {
+        "medium":   base,
+        "high":     base * 2.5,
+        "critical": base * 6.0,
+    }
+    print(
+        f"[WARN] risk_thresholds.pkl not found — using fallback multipliers "
+        f"(medium={thresholds['medium']:.6f}  "
+        f"high={thresholds['high']:.6f}  "
+        f"critical={thresholds['critical']:.6f})"
+    )
+    return thresholds
