@@ -240,6 +240,25 @@ ae_threshold = np.percentile(errors, (1 - attack_ratio) * 100)
 ae_preds = (errors > ae_threshold).astype(int)
 
 # ----------------------
+# RISK-LEVEL THRESHOLDS
+# Divide the anomalous zone (errors > ae_threshold) into Medium / High / Critical
+# using the 50th and 90th percentiles of that sub-distribution.
+# ----------------------
+_attack_errs = errors[errors > ae_threshold]
+if len(_attack_errs) >= 20:
+    _t_high     = float(np.percentile(_attack_errs, 50))   # median of anomalous errors
+    _t_critical = float(np.percentile(_attack_errs, 90))   # 90th pct of anomalous errors
+else:
+    _t_high     = float(ae_threshold) * 2.5
+    _t_critical = float(ae_threshold) * 6.0
+
+risk_thresholds = {
+    "medium":   float(ae_threshold),
+    "high":     _t_high,
+    "critical": _t_critical,
+}
+
+# ----------------------
 # SAVE TRAINED MODEL + PREPROCESSING OBJECTS
 # ----------------------
 os.makedirs("./artifacts", exist_ok=True)
@@ -248,8 +267,15 @@ torch.save(model.state_dict(), "./artifacts/autoencoder_model.pth")
 joblib.dump(scaler, "./artifacts/scaler.pkl")
 joblib.dump(ae_threshold, "./artifacts/threshold.pkl")
 joblib.dump(X.columns.tolist(), "./artifacts/feature_columns.pkl")
+joblib.dump(risk_thresholds, "./artifacts/risk_thresholds.pkl")
 
-print("Saved model, scaler, threshold, and feature columns.")
+print("Saved model, scaler, threshold, feature columns, and risk thresholds.")
+print(
+    f"Risk thresholds: "
+    f"medium={risk_thresholds['medium']:.6f}  "
+    f"high={risk_thresholds['high']:.6f}  "
+    f"critical={risk_thresholds['critical']:.6f}"
+)
 
 # ----------------------
 # 10. EVALUATION & STATS

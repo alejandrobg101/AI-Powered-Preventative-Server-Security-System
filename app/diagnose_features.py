@@ -27,6 +27,9 @@ import joblib
 
 from scapy.all import sniff, IP, TCP, UDP, conf
 
+from risk_classifier import classify as classify_risk, load_thresholds as load_risk_thresholds
+from response_engine import infer_anomaly_type, get_recommendation, format_response_block
+
 # --------------------------------------─
 # AUTOENCODER  (must match training architecture exactly)
 # --------------------------------------─
@@ -54,6 +57,7 @@ class Autoencoder(nn.Module):
 feature_columns: list = joblib.load("artifacts/feature_columns.pkl")
 scaler          = joblib.load("artifacts/scaler.pkl")
 threshold       = joblib.load("artifacts/threshold.pkl")
+risk_thresholds: dict = load_risk_thresholds("artifacts")
 
 model = Autoencoder(len(feature_columns))
 model.load_state_dict(torch.load("artifacts/autoencoder_model.pth", map_location="cpu"))
@@ -64,6 +68,9 @@ print(f"  FEATURE DIAGNOSTIC TOOL")
 print(f"{'='*60}")
 print(f"  Features  : {len(feature_columns)}")
 print(f"  Threshold : {threshold:.6f}")
+print(f"  Risk tiers: medium={risk_thresholds['medium']:.6f}  "
+      f"high={risk_thresholds['high']:.6f}  "
+      f"critical={risk_thresholds['critical']:.6f}")
 print(f"{'='*60}\n")
 
 # Print full training distribution for reference
@@ -339,14 +346,18 @@ def diagnose_flow(key, flow):
         recon = model(x_tensor)
         error = torch.mean((x_tensor - recon) ** 2, dim=1).item()
 
-    proto_map = {6: "TCP", 17: "UDP", 1: "ICMP"}
-    proto_str = proto_map.get(key[4], str(key[4]))
-    verdict   = "ATTACK" if error > threshold else "BENIGN"
+    proto_map    = {6: "TCP", 17: "UDP", 1: "ICMP"}
+    proto_str    = proto_map.get(key[4], str(key[4]))
+    risk         = classify_risk(error, risk_thresholds)
+    anomaly_type = infer_anomaly_type(flow, key)
+    rec          = get_recommendation(anomaly_type, risk.name)
 
     print(f"\n{'─'*70}")
-    print(f"  [{verdict}]  {key[0]}:{key[2]} → {key[1]}:{key[3]}  "
+    print(f"  [{risk.label}]  {key[0]}:{key[2]} → {key[1]}:{key[3]}  "
           f"proto={proto_str}  pkts={flow.fwd_pkts+flow.bwd_pkts}  "
-          f"error={error:.6f}")
+          f"error={error:.6f}  type={anomaly_type}")
+    if risk.code > 0:
+        print(format_response_block(rec, key[0]))
     print(f"{'─'*70}")
 
     # Show the top 15 worst features (largest deviation from training mean)
