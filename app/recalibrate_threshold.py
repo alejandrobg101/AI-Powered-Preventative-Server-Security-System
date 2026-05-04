@@ -14,6 +14,7 @@ Usage:
 """
 
 from __future__ import annotations
+from db_functions import save_threshold
 
 import argparse
 import threading
@@ -374,12 +375,14 @@ def main():
 
     errors = np.array(live_errors)
     new_threshold = float(np.percentile(errors, args.percentile))
+    save_threshold(new_threshold)
 
     print(f"\n{'='*60}")
     print(f"  RECALIBRATION RESULTS  ({len(errors)} flows)")
     print(f"{'='*60}")
     print(f"  Old threshold : {old_threshold:.6f}")
     print(f"  New threshold : {new_threshold:.6f}  ({args.percentile}th pct)")
+    print(f"  New threshold saved to database.")
     print(f"  Error stats   : min={errors.min():.6f}  "
           f"p50={np.percentile(errors,50):.6f}  "
           f"p95={np.percentile(errors,95):.6f}  "
