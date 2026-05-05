@@ -2,9 +2,20 @@ import argparse
 import sqlite3
 import time
 import math
+import string
 import threading
 from collections import defaultdict, deque
 from datetime import datetime, timezone
+from xml.etree.ElementTree import tostring
+
+from app.db_functions import db_read, load_threshold
+from schema import create_db
+from db_functions import (
+    db_insert_events,
+    db_read,
+    write_summary,
+    load_threshold
+)
 
 import numpy as np
 import pandas as pd
@@ -51,7 +62,8 @@ class Autoencoder(nn.Module):
 # --------------------------------------─
 feature_columns: list = joblib.load("artifacts/feature_columns.pkl")
 scaler = joblib.load("artifacts/scaler.pkl")
-threshold: float = joblib.load("artifacts/threshold.pkl")
+# threshold: float = joblib.load("artifacts/threshold.pkl")
+threshold = load_threshold()
 risk_thresholds: dict = load_risk_thresholds("artifacts")
 
 model = Autoencoder(len(feature_columns))
@@ -64,46 +76,59 @@ print(f"[INFO] Model loaded - {len(feature_columns)} features, threshold={thresh
 # --------------------------------------─
 # DATABASE
 # --------------------------------------─
-def _init_db() -> None:
-    try:
-        with sqlite3.connect("threat_memory.db") as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS threat_memory (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL,
-                    anomaly_type TEXT NOT NULL,
-                    recon_error REAL NOT NULL,
-                    risk_level TEXT NOT NULL,
-                    suggested_response TEXT NOT NULL
-                )
-            """)
-    except Exception as exc:
-        print(f"[WARN] DB init failed: {exc}")
+# def _init_db() -> None:
+#     try:
+#         with sqlite3.connect("threat_memory.db") as conn:
+#             conn.execute("""
+#                 CREATE TABLE IF NOT EXISTS threat_memory (
+#                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+#                     timestamp TEXT NOT NULL,
+#                     IP TEXT NOT NULL,
+#                     anomaly_type TEXT NOT NULL,
+#                     recon_error REAL NOT NULL,
+#                     risk_level TEXT NOT NULL,
+#                     suggested_response TEXT NOT NULL
+#                 )
+#             """)
+#     except Exception as exc:
+#         print(f"[WARN] DB init failed: {exc}")
 
 
-def _db_insert(anomaly_type: str, error: float, risk, recommendation) -> None:
-    try:
-        with sqlite3.connect("threat_memory.db") as conn:
-            conn.execute(
-                """
-                INSERT INTO threat_memory
-                    (timestamp, anomaly_type, recon_error, risk_level, suggested_response)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
-                    anomaly_type,
-                    round(error, 8),
-                    risk.name,
-                    recommendation.summary,
-                ),
-            )
-    except Exception as exc:
-        print(f"[WARN] DB write failed: {exc}")
+# def _db_insert(anomaly_type: str, ip: str, error: float, risk, recommendation) -> None:
+#     try:
+#         with sqlite3.connect("threat_memory.db") as conn:
+#             conn.execute(
+#                 """
+#                 INSERT INTO threat_memory
+#                     (timestamp, IP, anomaly_type, recon_error, risk_level, suggested_response)
+#                 VALUES (?, ?, ?, ?, ?, ?)
+#                 """,
+#                 (
+#                     datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+#                     ip,
+#                     anomaly_type,
+#                     round(error, 8),
+#                     risk.name,
+#                     recommendation.summary,
+#                 ),
+#             )
+#     except Exception as exc:
+#         print(f"[WARN] DB write failed: {exc}")
 
 
-_init_db()
+last_state = None
 
+def update_summary_if_needed():
+    global last_state
+
+    current_state = db_read()
+
+    if current_state != last_state:
+        write_summary(current_state)
+        last_state = current_state
+# _init_db()
+create_db()
+update_summary_if_needed()
 # Show scaler mean/std for flag features so we understand the training distribution
 flag_features = ["ACK Flag Count", "SYN Flag Count", "FIN Flag Count", "PSH Flag Count", "Fwd PSH Flags"]
 print("[INFO] Scaler stats for flag features (mean ± std from training data):")
@@ -555,12 +580,17 @@ def score_flow(key: tuple, flow: FlowStats):
     )
 
     if risk.code >= 2:  # High or Critical — print full response block
-        print(format_response_block(rec, src_ip))
+        print("Important Risk Detected: Log will be created for recommended response steps.")
+        print("Log name will correspond to this entry's id in the database.")
+        print("Example: logs/response_logs/[database id number].txt")
+        # print(format_response_block(rec, src_ip))
     elif risk.code == 1:  # Medium — print one-line action
         print(f"  Action: {rec.summary}")
 
     if risk.code > 0:
-        _db_insert(anomaly_type=anomaly_type, error=error, risk=risk, recommendation=rec)
+        # Check if there is anything to read
+        db_insert_events(anomaly_type=anomaly_type, ip=str(src_ip), error=error, risk=risk, recommendation=rec)
+        update_summary_if_needed()
 
     if DEBUG:
         scaled_row = x_scaled[0]
