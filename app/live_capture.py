@@ -8,7 +8,6 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 from xml.etree.ElementTree import tostring
 
-from app.db_functions import db_read, load_threshold
 from schema import create_db
 from db_functions import (
     db_insert_events,
