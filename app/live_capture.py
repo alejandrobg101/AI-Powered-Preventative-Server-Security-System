@@ -58,13 +58,14 @@ class Autoencoder(nn.Module):
     def forward(self, x):
         return self.decoder(self.encoder(x))
 
+db_reset()
+create_db()
 
 # --------------------------------------─
 # LOAD ARTIFACTS
 # --------------------------------------─
 feature_columns: list = joblib.load("artifacts/feature_columns.pkl")
 scaler = joblib.load("artifacts/scaler.pkl")
-# threshold: float = joblib.load("artifacts/threshold.pkl")
 threshold = load_threshold()
 risk_thresholds: dict = load_risk_thresholds("artifacts")
 
@@ -75,19 +76,18 @@ model.eval()
 print(f"[INFO] Model loaded - {len(feature_columns)} features, threshold={threshold:.6f}")
 
 
-last_state = None
+# last_state = None
 
-def update_summary_if_needed():
-    global last_state
+# def update_summary_if_needed():
+#     global last_state
+#
+#     current_state = db_read()
+#
+#     if current_state != last_state:
+#         write_summary(current_state)
+#         last_state = current_state
 
-    current_state = db_read()
-
-    if current_state != last_state:
-        write_summary(current_state)
-        last_state = current_state
-db_reset()
-create_db()
-update_summary_if_needed()
+# update_summary_if_needed()
 # Show scaler mean/std for flag features so we understand the training distribution
 flag_features = ["ACK Flag Count", "SYN Flag Count", "FIN Flag Count", "PSH Flag Count", "Fwd PSH Flags"]
 print("[INFO] Scaler stats for flag features (mean ± std from training data):")
@@ -532,12 +532,12 @@ def score_flow(key: tuple, flow: FlowStats):
     src_ip        = key[0]
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    print(
-        f"[{risk.label}]  {key[0]}:{key[2]} → {key[1]}:{key[3]}  "
-        f"proto={proto_str}  pkts={flow.fwd_pkts + flow.bwd_pkts}  "
-        f"bytes={sum(flow.fwd_bytes) + sum(flow.bwd_bytes)}  "
-        f"error={error:.6f}  type={anomaly_type}"
-    )
+    # print(
+    #     f"[{risk.label}]  {key[0]}:{key[2]} → {key[1]}:{key[3]}  "
+    #     f"proto={proto_str}  pkts={flow.fwd_pkts + flow.bwd_pkts}  "
+    #     f"bytes={sum(flow.fwd_bytes) + sum(flow.bwd_bytes)}  "
+    #     f"error={error:.6f}  type={anomaly_type}"
+    # )
 
     alert = {
         "timestamp": current_time,
@@ -569,18 +569,18 @@ def score_flow(key: tuple, flow: FlowStats):
     with open("logs/live_alerts.txt", "a", encoding="utf-8") as f:
         f.write(alert_text)
 
-    if risk.code >= 2:  # High or Critical — print full response block
-        print("Important Risk Detected: Log will be created for recommended response steps.")
-        print("Log name will correspond to this entry's id in the database.")
-        print("Example: logs/response_logs/[database id number].txt")
-        # print(format_response_block(rec, src_ip))
-    elif risk.code == 1:  # Medium — print one-line action
-        print(f"  Action: {rec.summary}")
+    # if risk.code >= 2:  # High or Critical — print full response block
+    #     print("Important Risk Detected: Log will be created for recommended response steps.")
+    #     print("Log name will correspond to this entry's id in the database.")
+    #     print("Example: logs/response_logs/[database id number].txt")
+    #     # print(format_response_block(rec, src_ip))
+    # elif risk.code == 1:  # Medium — print one-line action
+    #     print(f"  Action: {rec.summary}")
 
     if risk.code > 0:
         # Check if there is anything to read
         db_insert_events(anomaly_type=anomaly_type, ip=str(src_ip), error=error, risk=risk, recommendation=rec)
-        update_summary_if_needed()
+        # update_summary_if_needed()
 
     if DEBUG:
         scaled_row = x_scaled[0]
