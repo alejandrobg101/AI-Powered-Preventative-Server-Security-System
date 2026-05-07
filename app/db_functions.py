@@ -1,11 +1,11 @@
 import sqlite3
 import os
 from datetime import datetime, timezone
+import pandas as pd
 from response_engine import (
     format_response_block,
 )
 from schema import create_db
-
 
 # This script is used to test the database connection and verify that the threat_memory table was created successfully.
 # It also inserts a mock entry into the table and retrieves all entries to confirm that the data is being stored correctly.
@@ -123,38 +123,73 @@ def load_threshold():
     else:
         return 334.522111
 
+# Version 3.0 adding db read for dashboard tabs
+def db_read_risk_counts():
+    conn = sqlite3.connect("threat_memory.db")
+    cursor = conn.cursor()
 
-# conn = sqlite3.connect("threat_memory.db")
-# cursor = conn.cursor()
-#
-# # Insert mock data
-# cursor.execute("SELECT COUNT(*) FROM threat_memory")
-# count = cursor.fetchone()[0]
-#
-# if count == 0:
-#     cursor.execute("""
-#     INSERT INTO threat_memory (
-#         timestamp,
-#         anomaly_type,
-#         recon_error,
-#         risk_level,
-#         suggested_response
-#     ) VALUES (?, ?, ?, ?, ?)
-#     """, (
-#         "2026-03-26 22:00:00",
-#         "Test anomaly",
-#         0.75,
-#         "MEDIUM",
-#         "Log and monitor traffic"
-#     ))
-#     conn.commit()
-#
-# # Retrieve data so teammates can see it worked
-# cursor.execute("SELECT * FROM threat_memory")
-# rows = cursor.fetchall()
-#
-# print("Current entries in threat_memory:")
-# for row in rows:
-#     print(row)
-#
-# conn.close()
+    cursor.execute("""
+    SELECT risk_level, COUNT(*)
+    FROM threat_events
+    GROUP BY risk_level
+    """)
+
+    results = cursor.fetchall()
+
+    conn.close()
+
+    risk_counts = {
+        "Medium": 0,
+        "High": 0,
+        "Critical": 0
+    }
+
+    for risk, count in results:
+        if risk in risk_counts:
+            risk_counts[risk] = count
+
+    return risk_counts
+
+def db_read_history():
+    conn = sqlite3.connect("threat_memory.db")
+    df = pd.read_sql_query(
+        """
+        SELECT id, timestamp, IP, anomaly_type, recon_error, risk_level, suggested_response
+        FROM threat_events
+        ORDER BY id DESC
+        """,
+        conn
+    )
+    conn.close()
+    return df
+
+def db_read_metrics():
+    with sqlite3.connect("threat_memory.db") as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT COUNT(*) FROM threat_events")
+        total_alerts = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(DISTINCT IP) FROM threat_events")
+        unique_ips = cursor.fetchone()[0]
+
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM (
+                SELECT IP
+                FROM threat_events
+                GROUP BY IP
+                HAVING COUNT(*) > 1
+            )
+        """)
+        repeated_ip_count = cursor.fetchone()[0]
+
+        cursor.execute("SELECT MAX(timestamp) FROM threat_events")
+        latest_detection = cursor.fetchone()[0]
+
+    return {
+        "total_alerts": total_alerts,
+        "unique_ips": unique_ips,
+        "repeated_ip_count": repeated_ip_count,
+        "latest_detection": latest_detection or "None"
+    }

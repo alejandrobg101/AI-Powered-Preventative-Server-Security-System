@@ -1,14 +1,17 @@
 import argparse
 import sqlite3
 import time
+import subprocess
 import math
 import string
+import sys
+import os
 import threading
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from xml.etree.ElementTree import tostring
 
-from schema import create_db
+from schema import create_db, db_reset
 from db_functions import (
     db_insert_events,
     db_read,
@@ -72,49 +75,6 @@ model.eval()
 print(f"[INFO] Model loaded - {len(feature_columns)} features, threshold={threshold:.6f}")
 
 
-# --------------------------------------─
-# DATABASE
-# --------------------------------------─
-# def _init_db() -> None:
-#     try:
-#         with sqlite3.connect("threat_memory.db") as conn:
-#             conn.execute("""
-#                 CREATE TABLE IF NOT EXISTS threat_memory (
-#                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-#                     timestamp TEXT NOT NULL,
-#                     IP TEXT NOT NULL,
-#                     anomaly_type TEXT NOT NULL,
-#                     recon_error REAL NOT NULL,
-#                     risk_level TEXT NOT NULL,
-#                     suggested_response TEXT NOT NULL
-#                 )
-#             """)
-#     except Exception as exc:
-#         print(f"[WARN] DB init failed: {exc}")
-
-
-# def _db_insert(anomaly_type: str, ip: str, error: float, risk, recommendation) -> None:
-#     try:
-#         with sqlite3.connect("threat_memory.db") as conn:
-#             conn.execute(
-#                 """
-#                 INSERT INTO threat_memory
-#                     (timestamp, IP, anomaly_type, recon_error, risk_level, suggested_response)
-#                 VALUES (?, ?, ?, ?, ?, ?)
-#                 """,
-#                 (
-#                     datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
-#                     ip,
-#                     anomaly_type,
-#                     round(error, 8),
-#                     risk.name,
-#                     recommendation.summary,
-#                 ),
-#             )
-#     except Exception as exc:
-#         print(f"[WARN] DB write failed: {exc}")
-
-
 last_state = None
 
 def update_summary_if_needed():
@@ -125,7 +85,7 @@ def update_summary_if_needed():
     if current_state != last_state:
         write_summary(current_state)
         last_state = current_state
-# _init_db()
+db_reset()
 create_db()
 update_summary_if_needed()
 # Show scaler mean/std for flag features so we understand the training distribution
@@ -570,6 +530,7 @@ def score_flow(key: tuple, flow: FlowStats):
     proto_map     = {6: "TCP", 17: "UDP", 1: "ICMP"}
     proto_str     = proto_map.get(key[4], str(key[4]))
     src_ip        = key[0]
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     print(
         f"[{risk.label}]  {key[0]}:{key[2]} → {key[1]}:{key[3]}  "
@@ -577,6 +538,36 @@ def score_flow(key: tuple, flow: FlowStats):
         f"bytes={sum(flow.fwd_bytes) + sum(flow.bwd_bytes)}  "
         f"error={error:.6f}  type={anomaly_type}"
     )
+
+    alert = {
+        "timestamp": current_time,
+        "risk": risk.label,
+        "src_ip": key[0],
+        "dst_ip": key[1],
+        "src_port": key[2],
+        "dst_port": key[3],
+        "protocol": proto_str,
+        "packets": flow.fwd_pkts + flow.bwd_pkts,
+        "bytes": sum(flow.fwd_bytes) + sum(flow.bwd_bytes),
+        "error": error,
+        "type": anomaly_type,
+    }
+
+    alert_text = (
+        f"Time: {alert['timestamp']}\n"
+        f"[{alert['risk']}]\n"
+        f"Source: {alert['src_ip']}:{alert['src_port']}\n"
+        f"Destination: {alert['dst_ip']}:{alert['dst_port']}\n"
+        f"Protocol: {alert['protocol']}\n"
+        f"Packets: {alert['packets']}\n"
+        f"Bytes: {alert['bytes']}\n"
+        f"Error: {alert['error']:.6f}\n"
+        f"Type: {alert['type']}\n"
+        f"{'-' * 40}\n"
+    )
+
+    with open("logs/live_alerts.txt", "a", encoding="utf-8") as f:
+        f.write(alert_text)
 
     if risk.code >= 2:  # High or Critical — print full response block
         print("Important Risk Detected: Log will be created for recommended response steps.")
@@ -661,6 +652,10 @@ def main():
             captured_pkts.append(pkt)
         table.process(pkt)
 
+    dashboard_process = subprocess.Popen([
+        sys.executable, "-m", "streamlit", "run", "dashboard.py"
+    ])
+
     try:
         sniff(
             iface=args.iface,
@@ -679,7 +674,12 @@ def main():
         if args.pcap and captured_pkts:
             wrpcap("live.pcap", captured_pkts)
             print(f"[INFO] Saved {len(captured_pkts):,} packets to live.pcap")
+        dashboard_process.terminate()
+        # and
+        log_file = "logs/live_alerts.txt"
 
+        if os.path.exists(log_file):
+            os.remove(log_file)
         print("[INFO] Done.")
 
 
