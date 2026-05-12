@@ -35,6 +35,13 @@ def create_db():
             threshold REAL NOT NULL
         )
         """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS general_metrics (
+            metric_name TEXT PRIMARY KEY,
+            metric_value INTEGER DEFAULT 0
+        )
+        """)
+        cursor.execute("INSERT OR IGNORE INTO general_metrics (metric_name, metric_value) VALUES ('low_risk_events', 0)")
 
         print("Database created successfully.")
         os.makedirs("logs", exist_ok=True)
