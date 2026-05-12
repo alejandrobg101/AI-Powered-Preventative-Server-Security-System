@@ -68,19 +68,16 @@ with tab_history:
     if events_df.empty:
         st.info("No stored threat events yet.")
     else:
-        # ── NEW: Loop through each alert and render as an expandable card ──
-        # Each card shows event details on the left and recommended action on the right
         for _, row in events_df.iterrows():
             risk  = row["risk_level"]
             badge = RISK_COLOR.get(risk, "⚪")
             rec   = row["suggested_response"] or "No recommendation available."
 
-            # Card header shows risk, time, IP and anomaly type at a glance
             with st.expander(
                 f"{badge} [{risk}]  |  {row['timestamp']}  |  {row['IP']}  →  {row['anomaly_type']}",
                 expanded=False
             ):
-                # ── Two columns: details left, recommendation right ──
+             
                 col_left, col_right = st.columns([1, 1])
 
                 with col_left:
@@ -94,11 +91,9 @@ with tab_history:
 
                 with col_right:
                     st.markdown("**Recommended Action**")
-                    # ── This is the key addition: shows suggested_response from DB ──
                     st.info(rec)
 
-                # ── If a full response log exists for this event show it inline ──
-                # Response logs are only created for High and Critical events
+              
                 log_path = f"logs/response_logs/{row['id']}.txt"
                 if os.path.exists(log_path):
                     st.markdown("**Full Response Log**")
@@ -107,11 +102,11 @@ with tab_history:
 
         st.divider()
 
-        # ── Raw dataframe still accessible but collapsed by default ──
+        
         with st.expander("View raw table", expanded=False):
             st.dataframe(events_df, width="stretch")
 
-        # ── Manual response log viewer kept for convenience ──
+       
         st.subheader("Response Log Viewer")
         selected_id = st.number_input(
             "Enter event ID to view response log:",
