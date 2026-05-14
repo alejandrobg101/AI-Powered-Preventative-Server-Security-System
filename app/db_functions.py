@@ -163,6 +163,27 @@ def db_read_history():
     conn.close()
     return df
 
+def db_increment_low_count():
+    """Increments a counter for Low-risk events to track the FPR denominator."""
+    try:
+        with sqlite3.connect("threat_memory.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE general_metrics SET metric_value = metric_value + 1 WHERE metric_name = 'low_risk_events'")
+            conn.commit()
+    except Exception as exc:
+        print(f"[WARN] Failed to increment low count: {exc}")
+
+def db_get_low_count():
+    """Retrieves the count of Low-risk events for FPR calculation."""
+    try:
+        with sqlite3.connect("threat_memory.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT metric_value FROM general_metrics WHERE metric_name = 'low_risk_events'")
+            row = cursor.fetchone()
+            return row[0] if row else 0
+    except:
+        return 0
+
 def db_read_metrics():
     with sqlite3.connect("threat_memory.db") as conn:
         cursor = conn.cursor()

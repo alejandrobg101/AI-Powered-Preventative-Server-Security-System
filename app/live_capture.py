@@ -581,6 +581,10 @@ def score_flow(key: tuple, flow: FlowStats):
         # Check if there is anything to read
         db_insert_events(anomaly_type=anomaly_type, ip=str(src_ip), error=error, risk=risk, recommendation=rec)
         # update_summary_if_needed()
+    else:
+        #Increment the persistent counter for the FPR denominator
+        from db_functions import db_increment_low_count
+        db_increment_low_count()
 
     if DEBUG:
         scaled_row = x_scaled[0]

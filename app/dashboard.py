@@ -15,6 +15,16 @@ tab_live, tab_risk, tab_history, tab_metrics = st.tabs([
     "Metrics"
 ])
 
+RISK_COLOR = {
+    "Critical": "🔴",
+    "High":     "🟠",
+    "Medium":   "🟡",
+    "Low":      "🟢",
+}
+ 
+def risk_badge(risk: str) -> str:
+    return f"{RISK_COLOR.get(risk, '⚪')} **{risk}**"
+
 with tab_live:
     st.subheader("Live Events")
 
@@ -46,9 +56,9 @@ with tab_risk:
 
     col1, col2, col3 = st.columns(3)
 
-    col1.metric("Medium Alerts", risk_counts["Medium"])
-    col2.metric("High Alerts", risk_counts["High"])
-    col3.metric("Critical Alerts", risk_counts["Critical"])
+    col1.metric("🟡 Medium Alerts", risk_counts["Medium"])
+    col2.metric("🟠 High Alerts",   risk_counts["High"])
+    col3.metric("🔴 Critical Alerts", risk_counts["Critical"])
 
 with tab_history:
     st.subheader("Historical Log Table")
@@ -58,18 +68,52 @@ with tab_history:
     if events_df.empty:
         st.info("No stored threat events yet.")
     else:
-        st.dataframe(events_df, width="stretch")
+        for _, row in events_df.iterrows():
+            risk  = row["risk_level"]
+            badge = RISK_COLOR.get(risk, "⚪")
+            rec   = row["suggested_response"] or "No recommendation available."
 
+            with st.expander(
+                f"{badge} [{risk}]  |  {row['timestamp']}  |  {row['IP']}  →  {row['anomaly_type']}",
+                expanded=False
+            ):
+             
+                col_left, col_right = st.columns([1, 1])
+
+                with col_left:
+                    st.markdown("**Event Details**")
+                    st.markdown(f"- **ID:** {row['id']}")
+                    st.markdown(f"- **Time:** {row['timestamp']}")
+                    st.markdown(f"- **Source IP:** `{row['IP']}`")
+                    st.markdown(f"- **Type:** {row['anomaly_type']}")
+                    st.markdown(f"- **Risk:** {risk_badge(risk)}")
+                    st.markdown(f"- **Reconstruction Error:** `{row['recon_error']:.6f}`")
+
+                with col_right:
+                    st.markdown("**Recommended Action**")
+                    st.info(rec)
+
+              
+                log_path = f"logs/response_logs/{row['id']}.txt"
+                if os.path.exists(log_path):
+                    st.markdown("**Full Response Log**")
+                    with open(log_path, "r", encoding="utf-8") as f:
+                        st.code(f.read(), language="text")
+
+        st.divider()
+
+        
+        with st.expander("View raw table", expanded=False):
+            st.dataframe(events_df, width="stretch")
+
+       
         st.subheader("Response Log Viewer")
-
         selected_id = st.number_input(
             "Enter event ID to view response log:",
             min_value=1,
             step=1
         )
-
-        log_path = f"logs/response_logs/{selected_id}.txt"
-
+        log_path = f"logs/response_logs/{int(selected_id)}.txt"
         if os.path.exists(log_path):
             with open(log_path, "r", encoding="utf-8") as f:
                 st.code(f.read(), language="text")

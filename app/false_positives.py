@@ -1,16 +1,23 @@
 import sqlite3
 from datetime import datetime
+import zoneinfo
+from db_functions import db_get_low_count
 
 DB_PATH = "threat_memory.db"
 
-#NORMAL traffic window (converted to UTC) - 5 minutes of normal traffic
-# Define scenarios with their respective time windows (in UTC)
-# Replace the times with your own scenario windows as needed
-# I suggest that each  has a window you set. You can get a start and end from CMD or PowerShell
-# The times that PowerShell or CMD give you might be in local time, so convert them to UTC before using here.
-NORMAL_START = "2026-05-05 01:50:33 UTC"
-NORMAL_END   = "2026-05-05 01:56:08 UTC"
+# ---------------------------------------------------------
+# 1. SET YOUR NORMAL TRAFFIC WINDOW (Puerto Rico Time)
+# ---------------------------------------------------------
+NORMAL_START_PR = "2026-05-12 18:30:08" 
+NORMAL_END_PR   = "2026-05-12 18:33:21"
 
+def pr_to_utc(local_time_str):
+    """Converts Puerto Rico time string to UTC string for DB queries."""
+    pr_tz = zoneinfo.ZoneInfo("America/Puerto_Rico")
+    local_dt = datetime.strptime(local_time_str, "%Y-%m-%d %H:%M:%S")
+    local_dt = local_dt.replace(tzinfo=pr_tz)
+    utc_dt = local_dt.astimezone(zoneinfo.ZoneInfo("UTC"))
+    return utc_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
 
 def get_rows(start, end):
     with sqlite3.connect(DB_PATH) as conn:
@@ -23,7 +30,6 @@ def get_rows(start, end):
         """, (start, end))
         return cursor.fetchall()
 
-
 def summarize(rows):
     counts = {}
     for row in rows:
@@ -33,66 +39,57 @@ def summarize(rows):
         counts[key] = counts.get(key, 0) + 1
     return counts
 
-
 def is_false_positive(row):
-    return row[5] in ("High", "Critical")
-
+    # Medium, High, and Critical alerts are all FPs during normal traffic
+    return row[5] in ("Medium", "High", "Critical")
 
 if __name__ == "__main__":
-    print("=" * 70)
-    print("FALSE POSITIVE TEST (NORMAL TRAFFIC)")
-    print("=" * 70)
-    print(f"Window: {NORMAL_START} -> {NORMAL_END}")
+    # Convert window to UTC for the database query
+    NORMAL_START_UTC = pr_to_utc(NORMAL_START_PR)
+    NORMAL_END_UTC   = pr_to_utc(NORMAL_END_PR)
 
-    rows = get_rows(NORMAL_START, NORMAL_END)
+    print("=" * 75)
+    print("FALSE POSITIVE TEST (NORMAL TRAFFIC ANALYSIS)")
+    print("=" * 75)
+    print(f"Local Window (PR):  {NORMAL_START_PR} -> {NORMAL_END_PR}")
+    print(f"Query Window (UTC): {NORMAL_START_UTC} -> {NORMAL_END_UTC}")
 
-    total_alerts = len(rows)
+    # 1. Get Med/High/Crit "Mistakes" from the main table
+    rows = get_rows(NORMAL_START_UTC, NORMAL_END_UTC)
     fp_rows = [row for row in rows if is_false_positive(row)]
+    
+    # 2. Get "Lows" (Correct Non-Detections) from the metrics table
+    # Note: This count represents all Lows recorded by the live capture.
+    low_count = db_get_low_count()
 
-    print("\nTotal alerts during normal traffic:", total_alerts)
-    print("High/Critical alerts (False Positives):", len(fp_rows))
+    print("\n--- Detection Results ---")
+    print(f"Mistakes (Med/High/Crit):     {len(fp_rows)}")
+    print(f"Correct (Low-risk recorded):  {low_count}")
 
-    print("\nSummary by anomaly type and risk:")
-    summary = summarize(rows)
-
+    print("\nSummary of False Positives by Type:")
+    summary = summarize(fp_rows)
     if summary:
         for (anomaly, risk), count in summary.items():
             print(f"  {anomaly:<28} {risk:<10} {count}")
     else:
-        print("  No alerts found.")
+        print("  No false positives detected. System is clean!")
 
-    # Scenario-level FP
-    if len(fp_rows) > 0:
-        fp_scenario = 1
+    # 3. Calculate FPR
+    # Formula: False Positives / (False Positives + True Negatives)
+    numerator = len(fp_rows)
+    denominator = numerator + low_count
+
+    print("\n" + "=" * 75)
+    print("FINAL FALSE POSITIVE METRICS")
+    print("=" * 75)
+    
+    if denominator > 0:
+        fp_rate = (numerator / denominator)
+        print(f"Total Traffic Events Processed: {denominator}")
+        print(f"Event-level False Positive Rate: {fp_rate:.2%}")
+
     else:
-        fp_scenario = 0
+        print("Result: N/A - No traffic data found in DB or Metrics.")
 
-    print("\n" + "=" * 70)
-    print("FALSE POSITIVE RESULT")
-    print("=" * 70)
-    print(f"Scenario-level False Positive (0 or 1): {fp_scenario}")
-
-    if fp_scenario == 0:
-        print("Result: No false positives detected during normal traffic.")
-    else:
-        print("Result: False positive detected during normal traffic.")
-        print("\n" + "=" * 70)
-    print("FALSE POSITIVE RESULT")
-    print("=" * 70)
-    print(f"Scenario-level False Positive (0 or 1): {fp_scenario}")
-
-    if fp_scenario == 0:
-        print("Result: No false positives detected during normal traffic.")
-    else:
-        print("Result: False positive detected during normal traffic.")
-
-   
-    if total_alerts > 0:
-        fp_rate = len(fp_rows) / total_alerts
-        print(f"\nEvent-level False Positive Rate: {fp_rate:.2%}")
-    else:
-        print("\nEvent-level False Positive Rate: N/A (no alerts recorded)")
-
-    print("\nNote: Medium alerts are ignored as low-confidence signals.")
-
-    print("\nNote: Medium alerts are ignored as low-confidence signals.")
+    print("\nNote: This calculation treats Medium alerts as False Positives.")
+    print("Ensure you reset the low_count if you want a fresh testing session.")
