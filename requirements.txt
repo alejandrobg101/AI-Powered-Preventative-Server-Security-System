@@ -1,0 +1,11 @@
+streamlit
+streamlit-autorefresh
+scapy
+torch
+pandas
+numpy
+joblib
+scikit-learn
+matplotlib
+seaborn
+pytest

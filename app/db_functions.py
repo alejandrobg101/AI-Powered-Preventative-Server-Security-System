@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import json
 from datetime import datetime, timezone
 import pandas as pd
 from response_engine import (
@@ -14,17 +15,51 @@ from schema import create_db
 
 # Version 2: Insert Function, store response block in log folder if provided
 
-def db_insert_events(anomaly_type: str, ip: str, error: float, risk, recommendation):
+EXPLAINABILITY_COLUMNS = {
+    "feature_deviations": "TEXT DEFAULT '[]'",
+    "deviation_score": "REAL DEFAULT 0",
+    "explanation_summary": "TEXT DEFAULT ''",
+}
+
+
+def _ensure_explainability_columns(conn):
+    cursor = conn.execute("PRAGMA table_info(threat_events)")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+
+    for column_name, column_def in EXPLAINABILITY_COLUMNS.items():
+        if column_name not in existing_columns:
+            conn.execute(f"ALTER TABLE threat_events ADD COLUMN {column_name} {column_def}")
+
+
+def db_insert_events(
+    anomaly_type: str,
+    ip: str,
+    error: float,
+    risk,
+    recommendation,
+    feature_deviations=None,
+    deviation_score: float = 0.0,
+    explanation_summary: str = "",
+):
     entry_id = None
     try:
+        if not os.path.exists("threat_memory.db"):
+            create_db()
+
+        feature_deviations_json = json.dumps(feature_deviations or [])
+
         with sqlite3.connect("threat_memory.db") as conn:
+            _ensure_explainability_columns(conn)
             cursor = conn.cursor()
 
             cursor.execute(
                 """
                 INSERT INTO threat_events
-                (timestamp, IP, anomaly_type, recon_error, risk_level, suggested_response)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (
+                    timestamp, IP, anomaly_type, recon_error, risk_level, suggested_response,
+                    feature_deviations, deviation_score, explanation_summary
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
@@ -33,6 +68,9 @@ def db_insert_events(anomaly_type: str, ip: str, error: float, risk, recommendat
                     round(error, 8),
                     risk.name,
                     recommendation.summary,
+                    feature_deviations_json,
+                    round(float(deviation_score), 8),
+                    explanation_summary,
                 ),
             )
 
@@ -151,17 +189,58 @@ def db_read_risk_counts():
     return risk_counts
 
 def db_read_history():
-    conn = sqlite3.connect("threat_memory.db")
-    df = pd.read_sql_query(
+    return db_query_history()
+
+def db_query_history(risk_levels=None, source_ip: str = "", anomaly_type: str = "", limit: int = 250):
+    with sqlite3.connect("threat_memory.db") as conn:
+        cursor = conn.execute("PRAGMA table_info(threat_events)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+
+        feature_deviations_expr = (
+            "feature_deviations"
+            if "feature_deviations" in existing_columns
+            else "'[]' AS feature_deviations"
+        )
+        deviation_score_expr = (
+            "deviation_score"
+            if "deviation_score" in existing_columns
+            else "0 AS deviation_score"
+        )
+        explanation_summary_expr = (
+            "explanation_summary"
+            if "explanation_summary" in existing_columns
+            else "'' AS explanation_summary"
+        )
+
+        query = f"""
+            SELECT
+                id, timestamp, IP, anomaly_type, recon_error, risk_level, suggested_response,
+                {feature_deviations_expr}, {deviation_score_expr}, {explanation_summary_expr}
+            FROM threat_events
         """
-        SELECT id, timestamp, IP, anomaly_type, recon_error, risk_level, suggested_response
-        FROM threat_events
-        ORDER BY id DESC
-        """,
-        conn
-    )
-    conn.close()
-    return df
+        clauses = []
+        params = []
+
+        if risk_levels:
+            placeholders = ", ".join("?" for _ in risk_levels)
+            clauses.append(f"risk_level IN ({placeholders})")
+            params.extend(risk_levels)
+
+        if source_ip:
+            clauses.append("IP LIKE ?")
+            params.append(f"%{source_ip}%")
+
+        if anomaly_type:
+            clauses.append("anomaly_type LIKE ?")
+            params.append(f"%{anomaly_type}%")
+
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(max(1, int(limit)))
+
+        return pd.read_sql_query(query, conn, params=params)
 
 def db_increment_low_count():
     """Increments a counter for Low-risk events to track the FPR denominator."""
