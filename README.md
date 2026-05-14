@@ -6,7 +6,7 @@ An anomaly-detection security dashboard that watches live network traffic, score
 
 In simple terms: this project acts like a lightweight security monitor for a server. It watches network traffic, looks for behavior that does not match the model's learned "normal" baseline, and shows suspicious activity in a live dashboard.
 
-When traffic looks unusual, the system:
+This means that when traffic looks unusual, the system:
 
 - assigns a risk level: `Low`, `Medium`, `High`, or `Critical`
 - infers an anomaly type such as `SYN_FLOOD`, `PORT_SCAN`, `SSH_BRUTE_FORCE`, or `WEB_ATTACK`
