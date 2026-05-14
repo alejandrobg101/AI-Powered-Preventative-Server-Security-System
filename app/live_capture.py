@@ -18,8 +18,6 @@ from db_functions import (
     write_summary,
     load_threshold
 )
-from explainability import explain_alert
-from live_alert_feed import append_live_alert, clear_live_alerts
 
 import numpy as np
 import pandas as pd
@@ -529,7 +527,6 @@ def score_flow(key: tuple, flow: FlowStats):
     risk          = classify_risk(error, risk_thresholds)
     anomaly_type  = infer_anomaly_type(flow, key)
     rec           = get_recommendation(anomaly_type, risk.name)
-    explanation   = explain_alert(df_row.iloc[0].to_dict(), feature_columns, scaler, anomaly_type)
     proto_map     = {6: "TCP", 17: "UDP", 1: "ICMP"}
     proto_str     = proto_map.get(key[4], str(key[4]))
     src_ip        = key[0]
@@ -544,8 +541,7 @@ def score_flow(key: tuple, flow: FlowStats):
 
     alert = {
         "timestamp": current_time,
-        "risk": risk.name,
-        "risk_label": risk.label,
+        "risk": risk.label,
         "src_ip": key[0],
         "dst_ip": key[1],
         "src_port": key[2],
@@ -555,13 +551,23 @@ def score_flow(key: tuple, flow: FlowStats):
         "bytes": sum(flow.fwd_bytes) + sum(flow.bwd_bytes),
         "error": error,
         "type": anomaly_type,
-        "recommendation": rec.summary,
-        "feature_deviations": explanation["feature_deviations"],
-        "deviation_score": explanation["deviation_score"],
-        "explanation_summary": explanation["interpretability_review"]["reason"],
     }
 
-    append_live_alert(alert)
+    alert_text = (
+        f"Time: {alert['timestamp']}\n"
+        f"[{alert['risk']}]\n"
+        f"Source: {alert['src_ip']}:{alert['src_port']}\n"
+        f"Destination: {alert['dst_ip']}:{alert['dst_port']}\n"
+        f"Protocol: {alert['protocol']}\n"
+        f"Packets: {alert['packets']}\n"
+        f"Bytes: {alert['bytes']}\n"
+        f"Error: {alert['error']:.6f}\n"
+        f"Type: {alert['type']}\n"
+        f"{'-' * 40}\n"
+    )
+
+    with open("logs/live_alerts.txt", "a", encoding="utf-8") as f:
+        f.write(alert_text)
 
     # if risk.code >= 2:  # High or Critical — print full response block
     #     print("Important Risk Detected: Log will be created for recommended response steps.")
@@ -573,16 +579,7 @@ def score_flow(key: tuple, flow: FlowStats):
 
     if risk.code > 0:
         # Check if there is anything to read
-        db_insert_events(
-            anomaly_type=anomaly_type,
-            ip=str(src_ip),
-            error=error,
-            risk=risk,
-            recommendation=rec,
-            feature_deviations=explanation["feature_deviations"],
-            deviation_score=explanation["deviation_score"],
-            explanation_summary=explanation["interpretability_review"]["reason"],
-        )
+        db_insert_events(anomaly_type=anomaly_type, ip=str(src_ip), error=error, risk=risk, recommendation=rec)
         # update_summary_if_needed()
     else:
         #Increment the persistent counter for the FPR denominator
@@ -649,7 +646,6 @@ def main():
     print(f"[INFO] Flow timeout: {FLOW_TIMEOUT}s   min packets: {args.minpkts}")
     print("[INFO] Press Ctrl+C to stop.\n")
 
-    clear_live_alerts()
     captured_pkts = []
     table = FlowTable(flush_cb=score_flow, min_pkts=args.minpkts)
     flusher = TimeoutFlusher(table, interval=10.0)
@@ -683,7 +679,11 @@ def main():
             wrpcap("live.pcap", captured_pkts)
             print(f"[INFO] Saved {len(captured_pkts):,} packets to live.pcap")
         dashboard_process.terminate()
-        clear_live_alerts()
+        # and
+        log_file = "logs/live_alerts.txt"
+
+        if os.path.exists(log_file):
+            os.remove(log_file)
         print("[INFO] Done.")
 
 

@@ -2,12 +2,6 @@ import sqlite3
 import os
 import shutil
 
-EXPLAINABILITY_COLUMNS = {
-    "feature_deviations": "TEXT DEFAULT '[]'",
-    "deviation_score": "REAL DEFAULT 0",
-    "explanation_summary": "TEXT DEFAULT ''",
-}
-
 
 # This script creates the SQLite database and the threat_memory table if it doesn't already exist.
 # Only run this script once to set up the database. If you need to reset the database, you can uncomment the line that drops the table.
@@ -31,18 +25,9 @@ def create_db():
             anomaly_type TEXT NOT NULL,
             recon_error REAL NOT NULL,
             risk_level TEXT NOT NULL,
-            suggested_response TEXT NOT NULL,
-            feature_deviations TEXT DEFAULT '[]',
-            deviation_score REAL DEFAULT 0,
-            explanation_summary TEXT DEFAULT ''
+            suggested_response TEXT NOT NULL
         )
         """)
-
-        cursor.execute("PRAGMA table_info(threat_events)")
-        existing_columns = {row[1] for row in cursor.fetchall()}
-        for column_name, column_def in EXPLAINABILITY_COLUMNS.items():
-            if column_name not in existing_columns:
-                cursor.execute(f"ALTER TABLE threat_events ADD COLUMN {column_name} {column_def}")
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_thresholds (
