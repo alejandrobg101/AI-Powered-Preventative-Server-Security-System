@@ -1,6 +1,2 @@
 app/data/
 *.db
-.venv/
-__pycache__/
-*.pyc
-.idea/
