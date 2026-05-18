@@ -11,6 +11,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 from xml.etree.ElementTree import tostring
 
+
 from schema import create_db, db_reset
 from db_functions import (
     db_insert_events,
@@ -58,7 +59,8 @@ class Autoencoder(nn.Module):
     def forward(self, x):
         return self.decoder(self.encoder(x))
 
-db_reset()
+if "--no-reset" not in sys.argv:
+    db_reset()
 create_db()
 
 # --------------------------------------─
@@ -632,6 +634,8 @@ def main():
     parser.add_argument("--pcap", action="store_true", help="Save captured packets to live.pcap")
     parser.add_argument("--minpkts", type=int, default=4, help="Minimum packets to score a flow (default 4)")
     parser.add_argument("--debug", action="store_true", help="Print top 10 outlier features per flow")
+    parser.add_argument("--no-reset", action="store_true", help="Skip database reset prompt (used when launched from dashboard)")
+    parser.add_argument("--no-dashboard", action="store_true", help="Skip auto-launching the dashboard (used when dashboard is already running)")
     parser.add_argument("--threshold", type=float, default=None,
                         help="Override model threshold (default: use saved value)")
     args = parser.parse_args()
@@ -647,6 +651,7 @@ def main():
     print("[INFO] Press Ctrl+C to stop.\n")
 
     captured_pkts = []
+    dashboard_process = None
     table = FlowTable(flush_cb=score_flow, min_pkts=args.minpkts)
     flusher = TimeoutFlusher(table, interval=10.0)
     flusher.start()
@@ -656,9 +661,8 @@ def main():
             captured_pkts.append(pkt)
         table.process(pkt)
 
-    dashboard_process = subprocess.Popen([
-        sys.executable, "-m", "streamlit", "run", "dashboard.py"
-    ])
+    if not args.no_dashboard:
+        dashboard_process = subprocess.Popen([sys.executable, "-m", "streamlit", "run", "dashboard.py"])
 
     try:
         sniff(
@@ -678,7 +682,8 @@ def main():
         if args.pcap and captured_pkts:
             wrpcap("live.pcap", captured_pkts)
             print(f"[INFO] Saved {len(captured_pkts):,} packets to live.pcap")
-        dashboard_process.terminate()
+        if dashboard_process is not None:
+            dashboard_process.terminate()
         # and
         log_file = "logs/live_alerts.txt"
 

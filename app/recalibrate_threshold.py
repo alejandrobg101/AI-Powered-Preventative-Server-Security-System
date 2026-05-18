@@ -298,7 +298,7 @@ def collect_error(key, flow):
         error = torch.mean((xt - recon) ** 2, dim=1).item()
     live_errors.append(error)
     proto_map = {6: "TCP", 17: "UDP", 1: "ICMP"}
-    print(f"  Flow {len(live_errors):>4}: {key[0]}:{key[2]}→{key[1]}:{key[3]} "
+    print(f"  Flow {len(live_errors):>4}: {key[0]}:{key[2]}->{key[1]}:{key[3]} "
           f"proto={proto_map.get(key[4], str(key[4]))} "
           f"pkts={flow.fwd_pkts+flow.bwd_pkts} error={error:.6f}")
 

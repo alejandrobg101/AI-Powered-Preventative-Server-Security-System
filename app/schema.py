@@ -30,9 +30,34 @@ def create_db():
         """)
 
         cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id TEXT PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """)
+
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_thresholds (
             user_id TEXT PRIMARY KEY,
             threshold REAL NOT NULL
+        )
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS calibration_sessions (
+            session_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            stopped_at TEXT,
+            duration_seconds INTEGER DEFAULT 180,
+            sample_count INTEGER DEFAULT 0,
+            computed_threshold REAL,
+            error_message TEXT,
+            baseline_event_id INTEGER DEFAULT 0
         )
         """)
         cursor.execute("""
@@ -43,9 +68,9 @@ def create_db():
         """)
         cursor.execute("INSERT OR IGNORE INTO general_metrics (metric_name, metric_value) VALUES ('low_risk_events', 0)")
 
-        print("Database created successfully.")
+        # print("Database created successfully.")
         os.makedirs("logs", exist_ok=True)
-        print("Logs folder created successfully.")
+        # print("Logs folder created successfully.")
 
         conn.commit()
         conn.close()
@@ -62,10 +87,10 @@ def db_reset():
             print("Database and logs deleted.")
         elif confirm == "table":
             while True:
-                preserve = input("Preserve user_thresholds table? (yes/no): ").strip().lower()
-                if preserve in ("yes", "no"):
+                preserve = input("Preserve user_thresholds table, users table or both? ([users, threshold, both]/no): ").strip().lower()
+                if preserve in ("users", "no", "threshold", "both"):
                     break
-                print("Invalid input. Please type 'yes' or 'no'.")
+                print("Invalid input. Please type 'users' or 'threshold' or 'both' or 'no'.")
             conn = sqlite3.connect("threat_memory.db")
             cursor = conn.cursor()
 
@@ -80,7 +105,10 @@ def db_reset():
                 if table_name == "sqlite_sequence":
                     continue
 
-                if preserve == "yes" and table_name == "user_thresholds":
+                if table_name == "user_thresholds" and preserve in ("threshold", "both"):
+                    continue
+
+                if table_name == "users" and preserve in ("users", "both"):
                     continue
 
                 cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
