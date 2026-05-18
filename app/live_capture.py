@@ -11,6 +11,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 from xml.etree.ElementTree import tostring
 
+
 from schema import create_db, db_reset
 from db_functions import (
     db_insert_events,
@@ -650,6 +651,7 @@ def main():
     print("[INFO] Press Ctrl+C to stop.\n")
 
     captured_pkts = []
+    dashboard_process = None
     table = FlowTable(flush_cb=score_flow, min_pkts=args.minpkts)
     flusher = TimeoutFlusher(table, interval=10.0)
     flusher.start()
@@ -660,7 +662,7 @@ def main():
         table.process(pkt)
 
     if not args.no_dashboard:
-        subprocess.Popen([sys.executable, "-m", "streamlit", "run", "dashboard.py"])
+        dashboard_process = subprocess.Popen([sys.executable, "-m", "streamlit", "run", "dashboard.py"])
 
     try:
         sniff(
@@ -680,7 +682,8 @@ def main():
         if args.pcap and captured_pkts:
             wrpcap("live.pcap", captured_pkts)
             print(f"[INFO] Saved {len(captured_pkts):,} packets to live.pcap")
-        dashboard_process.terminate()
+        if dashboard_process is not None:
+            dashboard_process.terminate()
         # and
         log_file = "logs/live_alerts.txt"
 
