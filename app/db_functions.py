@@ -96,7 +96,7 @@ def write_summary(state):
             f.write("None\n")
 
 # Version 2.2 adding insert for threshold table
-def save_threshold(threshold: float):
+def save_threshold(threshold: float, user_id: str = "current_user"):
 
     if not os.path.exists("threat_memory.db"):
         create_db()
@@ -107,14 +107,14 @@ def save_threshold(threshold: float):
             INSERT OR REPLACE INTO user_thresholds (user_id, threshold)
             VALUES (?, ?)
             """,
-            ("current_user", threshold)
+            (user_id, threshold)
         )
 
-def load_threshold():
+def load_threshold(user_id: str = "current_user"):
     with sqlite3.connect("threat_memory.db") as conn:
         cursor = conn.execute(
             "SELECT threshold FROM user_thresholds WHERE user_id = ?",
-            ("current_user",)
+            (user_id,)
         )
         row = cursor.fetchone()
 

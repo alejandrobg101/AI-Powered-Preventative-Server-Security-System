@@ -30,9 +30,34 @@ def create_db():
         """)
 
         cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id TEXT PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """)
+
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_thresholds (
             user_id TEXT PRIMARY KEY,
             threshold REAL NOT NULL
+        )
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS calibration_sessions (
+            session_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            stopped_at TEXT,
+            duration_seconds INTEGER DEFAULT 180,
+            sample_count INTEGER DEFAULT 0,
+            computed_threshold REAL,
+            error_message TEXT,
+            baseline_event_id INTEGER DEFAULT 0
         )
         """)
         cursor.execute("""
