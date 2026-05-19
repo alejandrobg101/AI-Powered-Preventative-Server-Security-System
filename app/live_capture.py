@@ -71,11 +71,20 @@ scaler = joblib.load("artifacts/scaler.pkl")
 threshold = load_threshold()
 risk_thresholds: dict = load_risk_thresholds("artifacts")
 
+_DEFAULT_THRESHOLD = 334.522111
+if abs(threshold - _DEFAULT_THRESHOLD) > 1e-6:
+    risk_thresholds = {
+        "medium":   threshold,
+        "high":     threshold * 6.0,
+        "critical": threshold * 36.7,
+    }
+
 model = Autoencoder(len(feature_columns))
 model.load_state_dict(torch.load("artifacts/autoencoder_model.pth", map_location="cpu"))
 model.eval()
 
 print(f"[INFO] Model loaded - {len(feature_columns)} features, threshold={threshold:.6f}")
+print(f"[INFO] Risk thresholds   medium={risk_thresholds['medium']:.6f}  high={risk_thresholds['high']:.6f}  critical={risk_thresholds['critical']:.6f}")
 
 
 # last_state = None
