@@ -10,12 +10,18 @@ import sys
 import threading
 import subprocess
 
+try:
+    from .paths import app_dir
+except ImportError:
+    from paths import app_dir
+
 _proc: subprocess.Popen | None = None
 _lock = threading.Lock()
 
 
 def _app_dir() -> str:
-    return os.path.dirname(os.path.abspath(__file__))
+    """Return the directory containing this module for stable subprocess cwd."""
+    return str(app_dir())
 
 
 def start(iface: str | None = None) -> bool:
@@ -31,6 +37,7 @@ def start(iface: str | None = None) -> bool:
             cmd += ["--iface", iface]
 
         env = os.environ.copy()
+        # Keep child output decodable on Windows terminals and Streamlit logs.
         env["PYTHONIOENCODING"] = "utf-8"
 
         _proc = subprocess.Popen(
@@ -75,5 +82,6 @@ def is_running() -> bool:
 
 
 def pid() -> int | None:
+    """Return the active child process id, or None when stopped."""
     with _lock:
         return _proc.pid if (_proc is not None and _proc.poll() is None) else None

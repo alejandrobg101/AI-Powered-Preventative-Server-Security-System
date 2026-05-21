@@ -1,85 +1,127 @@
 # AI-Powered Preventative Server Security System
 
-An anomaly-detection security dashboard that watches live network traffic, scores each flow with a trained autoencoder, classifies risk, explains which features made the flow suspicious, and stores actionable alerts in SQLite.
+A local intrusion-detection dashboard that captures live server traffic, groups packets into flows, scores each flow with a trained PyTorch autoencoder, classifies risk, and stores actionable alerts in SQLite.
 
 ## What It Does
 
-In simple terms: this project acts like a lightweight security monitor for a server. It watches network traffic, looks for behavior that does not match the model's learned "normal" baseline, and shows suspicious activity in a live dashboard.
+This project acts like a lightweight security monitor for a server or workstation. It watches IPv4 traffic, converts packet flows into CIC-IDS2017-style numeric features, and flags flows whose reconstruction error is higher than the learned normal baseline.
 
-This means that when traffic looks unusual, the system:
+When traffic looks unusual, the system can:
 
-- assigns a risk level: `Low`, `Medium`, `High`, or `Critical`
-- infers an anomaly type such as `SYN_FLOOD`, `PORT_SCAN`, `SSH_BRUTE_FORCE`, or `WEB_ATTACK`
-- recommends a response action
-- logs the event to SQLite
-- shows the alert in a Streamlit dashboard
-- explains the alert with top feature deviations and a deviation score
+- assign a risk level: `Low`, `Medium`, `High`, or `Critical`
+- infer an anomaly family such as `SYN_FLOOD`, `PORT_SCAN`, `SSH_BRUTE_FORCE`, `WEB_ATTACK`, or `DNS_AMPLIFICATION`
+- write a live alert to `app/logs/live_alerts.txt`
+- store non-low alerts in `app/threat_memory.db`
+- create full response logs for High and Critical alerts in `app/logs/response_logs/`
+- show authentication, live IDS controls, alert history, metrics, and threshold calibration in Streamlit
+- track Low-risk event count separately for false-positive-rate calculations
 
 ## How It Works
 
-The detection pipeline has four main stages:
+The detection pipeline has five main stages:
 
-1. **Packet capture**
+1. **Database and artifacts**
+   - `app/schema.py` creates the SQLite tables used by alerts, users, user thresholds, calibration sessions, and aggregate metrics.
+   - `app/artifacts/` stores the trained model, scaler, base threshold, and feature column order.
+
+2. **Packet capture**
    - `app/live_capture.py` uses Scapy to sniff IPv4 traffic from a selected network interface.
-   - Packets are grouped into flows using a normalized 5-tuple: source IP, destination IP, source port, destination port, and protocol.
+   - `app/flow_features.py` groups packets into flows using a normalized 5-tuple: source IP, destination IP, source port, destination port, and protocol.
 
-2. **Feature extraction**
-   - Each flow is converted into CIC-IDS2017-style numeric features.
-   - Examples include packet counts, flow duration, packet length statistics, TCP flags, byte rates, inter-arrival timing, and window sizes.
+3. **Feature extraction**
+   - Each flow is converted into CIC-IDS2017-style features.
+   - Features include packet counts, byte totals, flow duration, packet length statistics, TCP flags, inter-arrival timing, packet rates, header lengths, active/idle times, and TCP window sizes.
 
-3. **ML anomaly scoring**
-   - A trained PyTorch autoencoder reconstructs the feature vector.
-   - The reconstruction error becomes the anomaly score.
-   - `app/risk_classifier.py` maps that score into risk tiers.
+4. **ML anomaly scoring**
+   - A PyTorch autoencoder reconstructs the scaled feature vector.
+   - The mean squared reconstruction error becomes the anomaly score.
+   - `app/model.py` centralizes the shared autoencoder architecture, artifact loading, feature alignment, and scoring helpers.
+   - `app/risk_classifier.py` maps that score into risk tiers with saved or fallback thresholds.
 
-4. **Response and explainability**
-   - `app/response_engine.py` infers an anomaly type with network-rule logic.
-   - `app/explainability.py` compares each feature against the training baseline and records:
-     - top feature deviations
-     - deviation score
-     - whether the feature evidence supports the inferred anomaly type
-   - Alerts are stored in `threat_memory.db` and surfaced in the dashboard.
+5. **Response and persistence**
+   - `app/response_engine.py` applies rule-based network logic to infer the anomaly type.
+   - `app/db_functions.py` writes non-low alerts to SQLite and writes response-log text for High/Critical alerts.
+   - `app/dashboard.py` reads SQLite and log files for the Streamlit UI.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A[Scapy packet sniffing] --> B[flow_features.py<br/>FlowStats + FlowTable]
+    B --> C[CIC-IDS2017 feature vector]
+    C --> D[model.py<br/>Scaler + Autoencoder]
+    D --> E[risk_classifier.py<br/>Low / Medium / High / Critical]
+    B --> F[response_engine.py<br/>anomaly type rules]
+    E --> G[db_functions.py<br/>SQLite + response logs]
+    F --> G
+    G --> H[dashboard.py<br/>Streamlit UI]
+    I[threshold_calibrator.py] --> J[recalibrate_threshold.py]
+    J --> D
+```
 
 ## Dashboard
 
 The Streamlit dashboard includes:
 
-- **Live Events** - recent detections refreshed every 2 seconds
+- **Login/Register** - local users stored in SQLite with bcrypt password hashes
+- **Live Events** - start/stop controls for `live_capture.py` and a live alert feed
 - **Risk Indicators** - Medium, High, and Critical alert totals
-- **Historical Logs** - SQLite-backed anomaly table with filters for risk, source IP, anomaly type, and row count
-- **Metrics** - total stored alerts, unique source IPs, repeated IPs, and latest detection time
+- **Historical Logs** - expandable stored alert details and response-log viewer
+- **Metrics** - total stored alerts, unique source IPs, repeated IP count, and latest detection
+- **Threshold Adjuster** - per-user live calibration that runs `app/recalibrate_threshold.py` in the background
 
-Historical event detail views include reconstruction error, deviation score, recommendation text, top feature deviations, and response logs for High/Critical events.
+The dashboard is local only. It is not a hardened multi-user web service and should not be exposed directly to the internet.
 
 ## Project Structure
 
 ```text
 .
 |-- app/
-|   |-- live_capture.py              # main live IDS runner
-|   |-- dashboard.py                 # Streamlit dashboard
-|   |-- autoencoder.py               # model training script
-|   |-- risk_classifier.py           # reconstruction error -> risk tier
-|   |-- response_engine.py           # anomaly type + recommendation rules
-|   |-- explainability.py            # feature deviation and validation logic
-|   |-- validate_explainability.py   # reviews stored alerts against target accuracy
-|   |-- db_functions.py              # SQLite read/write helpers
-|   |-- schema.py                    # SQLite schema creation/reset
-|   `-- artifacts/                   # trained model, scaler, thresholds, features
-|-- test/                            # lightweight unit tests and datasets
-|-- attacks/                         # helper attack/test command material
-|-- requirements.txt                 # Python dependency recipe
+|   |-- auth.py                    # SQLite-backed registration/login helpers
+|   |-- autoencoder.py             # trains the production autoencoder artifacts
+|   |-- check_features.py          # prints trained feature column names
+|   |-- dashboard.py               # Streamlit dashboard
+|   |-- db_functions.py            # SQLite read/write helpers
+|   |-- diagnose_features.py       # live feature/scoring diagnostic CLI
+|   |-- false_positives.py         # normal-window false-positive analysis
+|   |-- flow_features.py           # shared packet-flow aggregation + feature extraction
+|   |-- live_capture.py            # main live IDS packet capture and scoring runner
+|   |-- live_capture_manager.py    # dashboard subprocess manager for live_capture.py
+|   |-- model.py                   # shared autoencoder architecture + artifact scoring
+|   |-- paths.py                   # centralized app paths and test overrides
+|   |-- recalibrate_threshold.py   # live benign threshold recalibration CLI
+|   |-- response_engine.py         # anomaly type and mitigation recommendation rules
+|   |-- risk_classifier.py         # reconstruction error -> risk tier
+|   |-- schema.py                  # SQLite schema creation and reset prompt
+|   |-- threshold_calibrator.py    # dashboard background calibration session manager
+|   |-- true_positives.py          # attack-window true-positive analysis
+|   |-- artifacts/                 # trained model, scaler, threshold, feature columns
+|   `-- diagrams/                  # training/evaluation plots
+|-- attacks/
+|   `-- attack_cmd.bat             # Windows command reference for manual attack tests
+|-- .github/workflows/
+|   `-- ci.yml                     # fast syntax + unit-test checks for PRs
+|-- test/
+|   |-- data/                      # CIC-IDS2017 CSVs and synthetic data generator
+|   |-- simulations/               # Scapy traffic simulators and objective verification
+|   |-- test_integration.py        # end-to-end unit/integration tests
+|   |-- test_response_engine.py    # response rule unit tests
+|   `-- test_risk_classifier.py    # risk tier unit tests
+|-- clear_events.py                # clears app/threat_memory.db alert tables
+|-- Makefile                       # setup, test, lint, dashboard, live shortcuts
+|-- requirements.txt               # Python dependency recipe
 `-- README.md
 ```
 
 ## Requirements
 
 - Python 3.10 to 3.12 recommended
-- macOS, Linux, or Windows with Python installed
-- Admin/root permissions for live packet capture
+- macOS, Linux, or Windows
+- Admin/root privileges for live packet capture
+- Npcap on Windows when using Scapy packet capture
 - Existing trained artifacts in `app/artifacts/`
 
-The app uses Scapy for packet capture, PyTorch for the autoencoder, SQLite for local storage, and Streamlit for the UI.
+Install the Python packages from `requirements.txt`. The app uses Scapy for packet capture, PyTorch for the autoencoder, SQLite for local storage, and Streamlit for the UI.
 
 ## Setup
 
@@ -101,72 +143,161 @@ pip install -r requirements.txt
 
 Do not commit `.venv/`. It is local machine state and can be recreated from `requirements.txt`.
 
-## Run The Full System
+Common developer shortcuts:
 
-Run the live detector from the `app/` directory because the model artifacts, database, and logs are referenced with app-relative paths:
+```bash
+make setup       # create .venv and install packages
+make lint        # compile all Python files without writing repo pycache
+make test-fast   # run dependency-light unit tests
+make test        # run pytest discovery
+make dashboard   # start Streamlit dashboard
+```
+
+## Run The Dashboard
+
+The dashboard can start and stop the IDS process from the **Live Events** tab:
 
 ```bash
 cd app
-sudo ../.venv/bin/python live_capture.py
+../.venv/bin/streamlit run dashboard.py
 ```
 
-On Windows, run your terminal as Administrator and use:
+On Windows:
 
 ```powershell
 cd app
-..\.venv\Scripts\python live_capture.py
+..\.venv\Scripts\streamlit run dashboard.py
 ```
 
-If you need to choose a specific network interface:
-
-```bash
-sudo ../.venv/bin/python live_capture.py --iface en0
-```
-
-Useful options:
-
-```bash
-# Stop after 60 seconds
-sudo ../.venv/bin/python live_capture.py --timeout 60
-
-# Save captured packets to live.pcap
-sudo ../.venv/bin/python live_capture.py --pcap
-
-# Print top feature outliers in the terminal
-sudo ../.venv/bin/python live_capture.py --debug
-```
-
-When the app starts, Streamlit should open automatically. If not, open:
+Open the local Streamlit URL if the browser does not open automatically:
 
 ```text
 http://localhost:8501
 ```
 
-To stop the app, press `Ctrl+C` in the terminal running `live_capture.py`.
+Create a local account from the Register tab, then sign in. The account is stored in `app/threat_memory.db`.
 
-## Run Only The Dashboard
+## Run The Live IDS Directly
 
-If you want to inspect existing SQLite results without packet capture:
+Run the live detector directly:
 
 ```bash
-cd app
-../.venv/bin/python -c "from schema import create_db; create_db()"
-../.venv/bin/streamlit run dashboard.py
+sudo ./.venv/bin/python app/live_capture.py
 ```
+
+On Windows, run the terminal as Administrator:
+
+```powershell
+.\.venv\Scripts\python app\live_capture.py
+```
+
+Useful options:
+
+```bash
+# Choose a specific network interface
+sudo ./.venv/bin/python app/live_capture.py --iface en0
+
+# Stop after 60 seconds
+sudo ./.venv/bin/python app/live_capture.py --timeout 60
+
+# Save captured packets to app/live.pcap
+sudo ./.venv/bin/python app/live_capture.py --pcap
+
+# Print top scaled feature outliers for each scored flow
+sudo ./.venv/bin/python app/live_capture.py --debug
+
+# Skip auto-launching Streamlit
+sudo ./.venv/bin/python app/live_capture.py --no-dashboard
+```
+
+To stop the app, press `Ctrl+C` in the terminal running `live_capture.py`.
 
 ## Database Reset Prompt
 
-When `live_capture.py` starts and `threat_memory.db` already exists, the app asks whether to reset:
+When `live_capture.py` starts and `threat_memory.db` already exists, the app asks whether to reset data:
 
-- `no` - keep existing database and logs
-- `table` - clear tables and logs, with an option to preserve threshold settings
+- `no` - keep the existing database and logs
+- `table` - drop application tables and clear logs, with an option to preserve users, thresholds, or both
 - `database` - delete the database and logs completely
 
-Use `no` when you want to keep historical alerts.
+Use `no` when you want to keep historical alerts. Use `--no-reset` only for automation or when the dashboard launches the IDS for you.
+
+## Threshold Calibration
+
+The threshold adjuster learns a local baseline from known-good live traffic. It is useful when the original training threshold is too sensitive for your network.
+
+Dashboard path:
+
+```text
+Login -> Threshold Adjuster -> Run Threshold Adjuster
+```
+
+CLI path:
+
+```bash
+cd app
+sudo ../.venv/bin/python recalibrate_threshold.py --timeout 240
+```
+
+Optional interface and percentile:
+
+```bash
+sudo ../.venv/bin/python recalibrate_threshold.py --iface en0 --timeout 240 --percentile 99
+```
+
+Calibration saves the user threshold in SQLite and writes the current base threshold to `app/artifacts/threshold.pkl`. Restart `live_capture.py` after calibration so the detector loads the new value.
+
+## Runtime Paths
+
+Runtime paths are centralized in `app/paths.py`. Normal runs use:
+
+- database: `app/threat_memory.db`
+- logs: `app/logs/`
+- artifacts: `app/artifacts/`
+- training data: `app/data/`
+
+Tests and automation can override those paths with:
+
+```bash
+IDS_DB_PATH=/tmp/ids.db
+IDS_LOGS_DIR=/tmp/ids-logs
+IDS_ARTIFACTS_DIR=/path/to/artifacts
+IDS_DATA_DIR=/path/to/csvs
+```
+
+## Diagnostics
+
+Print the trained feature list:
+
+```bash
+cd app
+../.venv/bin/python check_features.py
+```
+
+Inspect live feature deviations and reconstruction-error contributors:
+
+```bash
+cd app
+sudo ../.venv/bin/python diagnose_features.py --timeout 60 --maxflows 5
+```
+
+Clear stored threat events:
+
+```bash
+./.venv/bin/python clear_events.py
+```
+
+Analyze saved alert windows. Edit the hard-coded Puerto Rico local time windows in each file first:
+
+```bash
+cd app
+../.venv/bin/python true_positives.py
+../.venv/bin/python false_positives.py
+```
 
 ## Manual Smoke Test
 
-After launching the app, generate harmless traffic in another terminal:
+After launching the IDS, generate harmless traffic in another terminal:
 
 ```bash
 ping -c 10 1.1.1.1
@@ -176,51 +307,63 @@ for i in {1..20}; do curl -s https://example.com >/dev/null; done
 Then check:
 
 - **Live Events** updates within a few seconds
-- **Historical Logs** shows stored non-low alerts
-- selected events show deviation score and top feature deviations
-- response logs appear for High/Critical events
+- **Historical Logs** shows stored non-low alerts if any were detected
+- High/Critical events have response logs
+- Low-risk traffic increments the Low-risk metric but does not create a `threat_events` row
 
-You can also inspect SQLite directly:
-
-```bash
-cd app
-sqlite3 threat_memory.db "SELECT id, timestamp, IP, anomaly_type, risk_level, recon_error, deviation_score FROM threat_events ORDER BY id DESC LIMIT 10;"
-```
-
-## Explainability Validation
-
-The explainability validator reviews 100% of stored alerts and checks whether the recorded feature deviations support the inferred anomaly type.
+You can inspect SQLite directly:
 
 ```bash
 cd app
-../.venv/bin/python validate_explainability.py --target 0.90
+sqlite3 threat_memory.db "SELECT id, timestamp, IP, anomaly_type, risk_level, recon_error FROM threat_events ORDER BY id DESC LIMIT 10;"
 ```
-
-Expected output includes:
-
-- reviewed alert count
-- passed/failed reviews
-- interpretability score
-- whether the score meets the target
-
-If it reports `0 / 0` reviewed alerts, the database does not currently contain stored non-low alerts.
 
 ## Tests
 
-Run the lightweight test scripts from the repository root:
+Fast tests:
 
 ```bash
 ./.venv/bin/python test/test_risk_classifier.py
 ./.venv/bin/python test/test_response_engine.py
-./.venv/bin/python test/test_live_alert_feed.py
-./.venv/bin/python test/test_explainability.py
-./.venv/bin/python test/test_risk_classifier_db_operations.py
+# or
+make test-fast
 ```
 
-Or run them with pytest:
+Integration tests:
 
 ```bash
-./.venv/bin/pytest test
+./.venv/bin/python -m pytest test/test_integration.py -v
+```
+
+Full test discovery:
+
+```bash
+./.venv/bin/python -m pytest test -v
+```
+
+Some simulation and objective tests require administrator/root privileges, packet-capture support, and platform-specific loopback interfaces.
+
+GitHub Actions runs the fast syntax and unit-test checks on pushes and pull requests to `main`.
+
+## Simulations
+
+The `test/simulations/` folder contains Scapy-based traffic generators for controlled IDS testing:
+
+- `sim_unusual_login.py` - SSH brute-force style login attempts
+- `sim_privilege_escalation.py` - privileged service probing
+- `sim_lateral_movement.py` - ICMP sweep plus TCP service enumeration
+- `sim_data_exfiltration.py` - large asymmetric outbound TCP flows
+- `sim_abnormal_process.py` - C2 beacon, URG-flag abuse, and DNS burst patterns
+- `run_all_simulations.py` - runs the five scenarios in sequence
+- `test_all_objectives.py` - verifies detection rate, false-positive rate, alert latency, and interpretability objectives
+
+Run simulations only in a lab environment you control. Most scripts default to loopback traffic.
+
+Example:
+
+```bash
+cd test/simulations
+sudo ../../.venv/bin/python run_all_simulations.py --iface lo --gap 10
 ```
 
 ## Training And Artifacts
@@ -232,7 +375,18 @@ The repository includes trained artifacts in `app/artifacts/`:
 - `threshold.pkl`
 - `feature_columns.pkl`
 
-These are loaded by the live capture pipeline. If you retrain the model with `app/autoencoder.py`, make sure the generated artifacts remain compatible with `live_capture.py` and `diagnose_features.py`.
+`risk_thresholds.pkl` may also be produced by training or objective calibration. If it is missing, `app/risk_classifier.py` derives Medium/High/Critical thresholds from `threshold.pkl`.
+
+To retrain:
+
+```bash
+cd app
+../.venv/bin/python autoencoder.py
+```
+
+`app/autoencoder.py` expects CIC-IDS2017 CSV files under `app/data/` by default. The repository tracks CSV data under `test/data/`; copy or symlink those files into `app/data/`, or update `dataset_files` in `autoencoder.py` before retraining.
+
+Generated artifacts must remain compatible with `app/model.py`, `live_capture.py`, `diagnose_features.py`, and `recalibrate_threshold.py`, especially the model architecture and `feature_columns.pkl` order.
 
 ## Troubleshooting
 
@@ -242,11 +396,11 @@ Packet sniffing usually requires admin/root privileges. Type your macOS/Linux us
 
 **No alerts appear**
 
-Low-risk traffic increments metrics but is not stored in the historical anomaly table. Try running longer, selecting the correct interface, or using `--debug` to inspect feature scoring.
+Low-risk traffic is written to the Low-risk metric, not to the historical anomaly table. Try running longer, selecting the correct interface, lowering `--minpkts` for testing, or using `--debug` to inspect feature scoring.
 
 **Streamlit does not open**
 
-Open `http://localhost:8501` manually, or run only the dashboard with:
+Open `http://localhost:8501` manually, or run:
 
 ```bash
 cd app
@@ -255,11 +409,22 @@ cd app
 
 **Wrong interface**
 
-List interfaces with a Python/Scapy shell or try common names like `en0` on macOS and `eth0`/`wlan0` on Linux.
+Use Scapy to list interfaces, then pass the selected one with `--iface`. Common examples are `en0` on macOS, `eth0` or `wlan0` on Linux, and `\Device\NPF_Loopback` for Windows loopback with Npcap.
+
+**Everything looks anomalous**
+
+Run the feature diagnostic first:
+
+```bash
+cd app
+sudo ../.venv/bin/python diagnose_features.py --timeout 60
+```
+
+If the traffic is known-good, run threshold calibration and restart live capture.
 
 **Dependency errors**
 
-Recreate the venv:
+Recreate the virtual environment:
 
 ```bash
 rm -rf .venv

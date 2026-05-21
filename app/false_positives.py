@@ -1,9 +1,19 @@
+"""Calculate event-level false positives for a known-normal time window.
+
+Edit NORMAL_START_PR and NORMAL_END_PR before running. The database stores UTC
+timestamps, so this script converts Puerto Rico local time to UTC first.
+"""
+
 import sqlite3
 from datetime import datetime
 import zoneinfo
-from db_functions import db_get_low_count
 
-DB_PATH = "threat_memory.db"
+try:
+    from .db_functions import db_get_low_count
+    from .paths import db_path
+except ImportError:
+    from db_functions import db_get_low_count
+    from paths import db_path
 
 # ---------------------------------------------------------
 # 1. SET YOUR NORMAL TRAFFIC WINDOW (Puerto Rico Time)
@@ -20,7 +30,8 @@ def pr_to_utc(local_time_str):
     return utc_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
 
 def get_rows(start, end):
-    with sqlite3.connect(DB_PATH) as conn:
+    """Fetch stored alerts between two UTC timestamp strings."""
+    with sqlite3.connect(db_path()) as conn:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT id, timestamp, IP, anomaly_type, recon_error, risk_level
@@ -31,6 +42,7 @@ def get_rows(start, end):
         return cursor.fetchall()
 
 def summarize(rows):
+    """Count false-positive rows by (anomaly_type, risk_level)."""
     counts = {}
     for row in rows:
         anomaly = row[3]
@@ -40,6 +52,7 @@ def summarize(rows):
     return counts
 
 def is_false_positive(row):
+    """Return True when a stored alert is a mistake in the normal window."""
     # Medium, High, and Critical alerts are all FPs during normal traffic
     return row[5] in ("Medium", "High", "Critical")
 

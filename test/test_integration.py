@@ -16,7 +16,6 @@ from __future__ import annotations
 import os
 import sys
 import shutil
-import sqlite3
 import tempfile
 import time
 import unittest
@@ -25,32 +24,15 @@ import numpy as np
 import pandas as pd
 import torch
 
-# ── Path setup: imports need app/ on sys.path, and artifacts/ at cwd ─────────
+# ── Path setup: imports need app/ on sys.path; paths.py handles cwd safely ───
 APP_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "app"))
 sys.path.insert(0, APP_DIR)
 
-# ── Suppress db_reset()'s input() prompt that fires on import of live_capture ─
-# live_capture.py does `from schema import create_db, db_reset` then calls both
-# at module level. We no-op db_reset before live_capture is first imported so
-# the test never waits on stdin. create_db() is allowed to run normally — it
-# creates a fresh DB + logs/ if they are absent in APP_DIR.
-import schema as _schema_mod
-_schema_mod.db_reset = lambda: None          # no-op for test session
-
-_saved_cwd = os.getcwd()
-os.chdir(APP_DIR)                            # relative paths in live_capture.py
-import live_capture                          # loads model + scaler + thresholds
-from live_capture import (
-    FlowStats, score_flow,
-    feature_columns, scaler,
-    model as _ae_model,
-    risk_thresholds,
-)
-os.chdir(_saved_cwd)
-
 # ── Modules with no import-time side effects ──────────────────────────────────
-import joblib
+import live_capture
 from scapy.all import IP, TCP, UDP, ICMP, Raw
+from flow_features import FlowStats
+from model import load_detector_runtime
 from risk_classifier import (
     classify, load_thresholds,
     LOW, MEDIUM, HIGH, CRITICAL, ALL_LEVELS, RiskLevel,
@@ -67,6 +49,22 @@ from db_functions import (
     db_insert_events, db_read_history, db_read_risk_counts,
     db_read_metrics, db_increment_low_count, db_get_low_count,
 )
+from paths import live_alerts_path, response_logs_dir
+
+_RUNTIME = load_detector_runtime(os.path.join(APP_DIR, "artifacts"))
+feature_columns = _RUNTIME.feature_columns
+scaler = _RUNTIME.scaler
+_ae_model = _RUNTIME.model
+risk_thresholds = _RUNTIME.risk_thresholds
+live_capture._runtime = _RUNTIME
+live_capture.feature_columns.clear()
+live_capture.feature_columns.extend(_RUNTIME.feature_columns)
+live_capture.scaler = _RUNTIME.scaler
+live_capture.threshold = _RUNTIME.threshold
+live_capture.risk_thresholds.clear()
+live_capture.risk_thresholds.update(_RUNTIME.risk_thresholds)
+live_capture.model = _RUNTIME.model
+score_flow = live_capture.score_flow
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -381,14 +379,23 @@ class TestStage4_Dashboard(unittest.TestCase):
 
     def setUp(self):
         """Each test gets a fresh, isolated SQLite database in a temp directory."""
-        self._orig_cwd = os.getcwd()
         self._tmpdir = tempfile.mkdtemp(prefix="ids_test_")
-        os.chdir(self._tmpdir)
+        self._orig_db = os.environ.get("IDS_DB_PATH")
+        self._orig_logs = os.environ.get("IDS_LOGS_DIR")
+        os.environ["IDS_DB_PATH"] = os.path.join(self._tmpdir, "threat_memory.db")
+        os.environ["IDS_LOGS_DIR"] = os.path.join(self._tmpdir, "logs")
         from schema import create_db
-        create_db()                        # creates threat_memory.db + logs/ here
+        create_db()
 
     def tearDown(self):
-        os.chdir(self._orig_cwd)
+        if self._orig_db is None:
+            os.environ.pop("IDS_DB_PATH", None)
+        else:
+            os.environ["IDS_DB_PATH"] = self._orig_db
+        if self._orig_logs is None:
+            os.environ.pop("IDS_LOGS_DIR", None)
+        else:
+            os.environ["IDS_LOGS_DIR"] = self._orig_logs
         shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     # ── helpers ──────────────────────────────────────────────────────────────
@@ -458,13 +465,13 @@ class TestStage4_Dashboard(unittest.TestCase):
     def test_response_log_written_for_high_risk(self):
         """A High-risk event produces a response log file in logs/response_logs/."""
         self._insert(anomaly=SSH_BRUTE_FORCE, ip="172.16.0.5", error=7.0, risk=HIGH)
-        log_dir = os.path.join(self._tmpdir, "logs", "response_logs")
+        log_dir = response_logs_dir()
         log_files = os.listdir(log_dir) if os.path.isdir(log_dir) else []
         self.assertEqual(len(log_files), 1, "Expected exactly one response log file")
 
     def test_response_log_written_for_critical_risk(self):
         self._insert(anomaly=UDP_FLOOD, ip="172.16.0.6", error=25.0, risk=CRITICAL)
-        log_dir = os.path.join(self._tmpdir, "logs", "response_logs")
+        log_dir = response_logs_dir()
         log_files = os.listdir(log_dir) if os.path.isdir(log_dir) else []
         self.assertEqual(len(log_files), 1)
 
@@ -473,7 +480,7 @@ class TestStage4_Dashboard(unittest.TestCase):
         self._insert(anomaly=GENERIC_TCP, ip="172.16.0.7", error=1.5, risk=MEDIUM)
         df = db_read_history()
         self.assertEqual(len(df), 1, "Medium event should be in threat_events")
-        log_dir = os.path.join(self._tmpdir, "logs", "response_logs")
+        log_dir = response_logs_dir()
         log_files = os.listdir(log_dir) if os.path.isdir(log_dir) else []
         self.assertEqual(len(log_files), 0, "No response log expected for Medium")
 
@@ -481,7 +488,7 @@ class TestStage4_Dashboard(unittest.TestCase):
         """Response log content has the source IP substituted in the action steps."""
         target_ip = "192.0.2.99"
         self._insert(anomaly=SYN_FLOOD, ip=target_ip, error=8.0, risk=HIGH)
-        log_dir = os.path.join(self._tmpdir, "logs", "response_logs")
+        log_dir = response_logs_dir()
         log_file = os.listdir(log_dir)[0]
         content = open(os.path.join(log_dir, log_file), encoding="utf-8").read()
         self.assertIn(target_ip, content)
@@ -512,17 +519,25 @@ class TestStage5_FullPipeline(unittest.TestCase):
     """End-to-end: packet accumulation → model inference → risk → DB → queries."""
 
     def setUp(self):
-        self._orig_cwd = os.getcwd()
         self._tmpdir = tempfile.mkdtemp(prefix="ids_e2e_")
-        os.chdir(self._tmpdir)
+        self._orig_db = os.environ.get("IDS_DB_PATH")
+        self._orig_logs = os.environ.get("IDS_LOGS_DIR")
+        os.environ["IDS_DB_PATH"] = os.path.join(self._tmpdir, "threat_memory.db")
+        os.environ["IDS_LOGS_DIR"] = os.path.join(self._tmpdir, "logs")
         from schema import create_db
         create_db()
         # score_flow appends to logs/live_alerts.txt — ensure it exists
-        with open("logs/live_alerts.txt", "a", encoding="utf-8"):
-            pass
+        live_alerts_path().touch()
 
     def tearDown(self):
-        os.chdir(self._orig_cwd)
+        if self._orig_db is None:
+            os.environ.pop("IDS_DB_PATH", None)
+        else:
+            os.environ["IDS_DB_PATH"] = self._orig_db
+        if self._orig_logs is None:
+            os.environ.pop("IDS_LOGS_DIR", None)
+        else:
+            os.environ["IDS_LOGS_DIR"] = self._orig_logs
         shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     def test_score_flow_does_not_raise(self):
@@ -534,7 +549,7 @@ class TestStage5_FullPipeline(unittest.TestCase):
         """score_flow always appends an entry to logs/live_alerts.txt."""
         key, flow = _build_tcp_flow()
         score_flow(key, flow)
-        with open("logs/live_alerts.txt", encoding="utf-8") as f:
+        with open(live_alerts_path(), encoding="utf-8") as f:
             content = f.read()
         self.assertIn(key[0], content, "Source IP must appear in the alert log")
 

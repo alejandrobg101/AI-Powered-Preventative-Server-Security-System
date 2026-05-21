@@ -1,0 +1,12 @@
+bcrypt
+joblib
+matplotlib
+numpy
+pandas
+pytest
+scapy
+scikit-learn
+seaborn
+streamlit
+streamlit-autorefresh
+torch

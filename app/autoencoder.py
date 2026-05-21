@@ -1,3 +1,10 @@
+"""Train and evaluate the production autoencoder artifacts.
+
+The script reads CIC-IDS2017 CSV files, trains the autoencoder
+on benign traffic only, evaluates reconstruction-error detection, writes plots
+to app/diagrams/, and saves model/scaler/threshold artifacts to app/artifacts/.
+"""
+
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -9,26 +16,34 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import time
-import os
 import joblib
+
+try:
+    from .model import Autoencoder
+    from .paths import artifacts_dir, data_dir, diagrams_dir
+except ImportError:
+    from model import Autoencoder
+    from paths import artifacts_dir, data_dir, diagrams_dir
 
 # ----------------------
 # 1. LOAD DATASET  — all 8 files
 # ----------------------
 dataset_files = [
-    "./data/Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv",
-    "./data/Friday-WorkingHours-Afternoon-PortScan.pcap_ISCX.csv",
-    "./data/Tuesday-WorkingHours.pcap_ISCX.csv",
-    "./data/Wednesday-workingHours.pcap_ISCX.csv",
-    "./data/Thursday-WorkingHours-Morning-WebAttacks.pcap_ISCX.csv",
-    "./data/Thursday-WorkingHours-Afternoon-Infilteration.pcap_ISCX.csv",
-    "./data/Friday-WorkingHours-Morning.pcap_ISCX.csv",
-    "./data/Monday-WorkingHours.pcap_ISCX.csv",
+    data_dir() / "Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv",
+    data_dir() / "Friday-WorkingHours-Afternoon-PortScan.pcap_ISCX.csv",
+    data_dir() / "Tuesday-WorkingHours.pcap_ISCX.csv",
+    data_dir() / "Wednesday-workingHours.pcap_ISCX.csv",
+    data_dir() / "Thursday-WorkingHours-Morning-WebAttacks.pcap_ISCX.csv",
+    data_dir() / "Thursday-WorkingHours-Afternoon-Infilteration.pcap_ISCX.csv",
+    data_dir() / "Friday-WorkingHours-Morning.pcap_ISCX.csv",
+    data_dir() / "Monday-WorkingHours.pcap_ISCX.csv",
 ]
 
 dfs = []
 for f in dataset_files:
-    if os.path.exists(f):
+    # Missing files are skipped so the script can train on whatever CIC-IDS2017
+    # subset is available locally.
+    if f.exists():
         tmp = pd.read_csv(f, low_memory=False)
         tmp.columns = tmp.columns.str.strip()
         dfs.append(tmp)
@@ -126,33 +141,6 @@ dataset = TensorDataset(X_tensor_train)
 dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
 
 
-# ----------------------
-# 7. MODEL DEFINITION
-# ----------------------
-class Autoencoder(nn.Module):
-    def __init__(self, input_dim):
-        super(Autoencoder, self).__init__()
-        self.encoder = nn.Sequential(
-            nn.Linear(input_dim, 64),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, 16)
-        )
-        self.decoder = nn.Sequential(
-            nn.Linear(16, 32),
-            nn.ReLU(),
-            nn.Linear(32, 64),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(64, input_dim)
-        )
-
-    def forward(self, x):
-        return self.decoder(self.encoder(x))
-
-
 input_dim = X_scaled.shape[1]
 model = Autoencoder(input_dim)
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -236,6 +224,8 @@ with torch.no_grad():
     errors = torch.mean((X_tensor_full - reconstructed) ** 2, dim=1).numpy()
 
 # Threshold based on actual attack ratio in data
+# Choosing the percentile from the observed class mix gives roughly the same
+# anomalous proportion as the labeled training corpus.
 ae_threshold = np.percentile(errors, (1 - attack_ratio) * 100)
 ae_preds = (errors > ae_threshold).astype(int)
 
@@ -261,13 +251,13 @@ risk_thresholds = {
 # ----------------------
 # SAVE TRAINED MODEL + PREPROCESSING OBJECTS
 # ----------------------
-os.makedirs("./artifacts", exist_ok=True)
+artifacts_dir().mkdir(parents=True, exist_ok=True)
 
-torch.save(model.state_dict(), "./artifacts/autoencoder_model.pth")
-joblib.dump(scaler, "./artifacts/scaler.pkl")
-joblib.dump(ae_threshold, "./artifacts/threshold.pkl")
-joblib.dump(X.columns.tolist(), "./artifacts/feature_columns.pkl")
-joblib.dump(risk_thresholds, "./artifacts/risk_thresholds.pkl")
+torch.save(model.state_dict(), artifacts_dir() / "autoencoder_model.pth")
+joblib.dump(scaler, artifacts_dir() / "scaler.pkl")
+joblib.dump(ae_threshold, artifacts_dir() / "threshold.pkl")
+joblib.dump(X.columns.tolist(), artifacts_dir() / "feature_columns.pkl")
+joblib.dump(risk_thresholds, artifacts_dir() / "risk_thresholds.pkl")
 
 print("Saved model, scaler, threshold, feature columns, and risk thresholds.")
 print(
@@ -315,7 +305,7 @@ print("-" * 52)
 # ----------------------
 # 11. VISUALIZATIONS
 # ----------------------
-os.makedirs("./diagrams", exist_ok=True)
+diagrams_dir().mkdir(parents=True, exist_ok=True)
 
 # - A. Training Loss Curve -
 plt.figure(figsize=(8, 4))
@@ -328,7 +318,7 @@ plt.ylabel("MSE Loss")
 plt.title("Autoencoder Training vs Validation Loss")
 plt.legend()
 plt.tight_layout()
-plt.savefig("./diagrams/ae_loss_curve.png", dpi=150)
+plt.savefig(diagrams_dir() / "ae_loss_curve.png", dpi=150)
 plt.show()
 print("Saved: ae_loss_curve.png")
 
@@ -341,7 +331,7 @@ plt.title("Autoencoder — Confusion Matrix")
 plt.ylabel("True Label")
 plt.xlabel("Predicted Label")
 plt.tight_layout()
-plt.savefig("./diagrams/ae_confusion_matrix.png", dpi=150)
+plt.savefig(diagrams_dir() / "ae_confusion_matrix.png", dpi=150)
 plt.show()
 print("Saved: ae_confusion_matrix.png")
 
@@ -355,7 +345,7 @@ plt.ylabel("True Positive Rate (Recall)")
 plt.title("Autoencoder — ROC Curve")
 plt.legend(loc="lower right")
 plt.tight_layout()
-plt.savefig("./diagrams/ae_roc_curve.png", dpi=150)
+plt.savefig(diagrams_dir() / "ae_roc_curve.png", dpi=150)
 plt.show()
 print("Saved: ae_roc_curve.png")
 
@@ -372,7 +362,7 @@ plt.ylabel("Density")
 plt.title("Autoencoder — Reconstruction Error Distribution")
 plt.legend()
 plt.tight_layout()
-plt.savefig("./diagrams/ae_error_distribution.png", dpi=150)
+plt.savefig(diagrams_dir() / "ae_error_distribution.png", dpi=150)
 plt.show()
 print("Saved: ae_error_distribution.png")
 

@@ -1,9 +1,19 @@
+"""Print the exact feature order expected by the trained autoencoder.
+
+Run after training or when debugging feature mismatch problems:
+    python check_features.py
+"""
+
 import joblib
 
-#This file lists all the features used in the model training. 
-# It can be used to verify that the correct features are being extracted from the live data and passed to the model for scoring.
-# Make sure to run this file after you have trained the model and saved the artifacts, 
-feature_columns = joblib.load("artifacts/feature_columns.pkl")
+try:
+    from .paths import artifacts_dir
+except ImportError:
+    from paths import artifacts_dir
+
+# feature_columns.pkl is the contract between training, live capture,
+# diagnostics, recalibration, and integration tests.
+feature_columns = joblib.load(artifacts_dir() / "feature_columns.pkl")
 
 print("Number of features:", len(feature_columns))
 print("\nFeature columns:\n")

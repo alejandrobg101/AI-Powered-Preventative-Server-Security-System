@@ -40,6 +40,7 @@ PAYLOAD_RESP = b"\x00" * 68      # Simulated server response
 
 
 def _rand_src(location_block: str) -> str:
+    """Pick one source address from a documentation IP block."""
     return location_block + str(random.randint(1, 254))
 
 
@@ -65,6 +66,7 @@ def simulate_login_attempt(target: str, src_ip: str, sport: int, iface: str):
 
 
 def main():
+    """Parse options and send repeated simulated SSH login attempts."""
     parser = argparse.ArgumentParser(
         description="IDS simulation -- unusual login location (SSH brute-force from geo-diverse IPs)")
     parser.add_argument("--target", default="127.0.0.1",

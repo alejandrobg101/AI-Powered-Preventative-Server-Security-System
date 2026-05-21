@@ -44,7 +44,6 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
 import joblib
 
 warnings.filterwarnings("ignore")
@@ -64,32 +63,12 @@ TARGET      = "127.0.0.1"
 
 sys.path.insert(0, APP_DIR)
 from risk_classifier import classify as classify_risk
+from model import Autoencoder
 
 # Synthetic attack labels used for DR evaluation.
 # "PortScan" excluded: single-SYN flows lie within the benign reconstruction-
 # error manifold -- detecting port scans requires session/graph-level analysis.
 ATTACK_LABELS = {"DDoS", "BruteForce", "Botnet", "ZeroDay", "Exfiltration"}
-
-
-# ---------------------------------------------------------------------------
-# Autoencoder (architecture must match live_capture.py / autoencoder.py)
-# ---------------------------------------------------------------------------
-class Autoencoder(nn.Module):
-    def __init__(self, input_dim: int):
-        super().__init__()
-        self.encoder = nn.Sequential(
-            nn.Linear(input_dim, 64), nn.ReLU(), nn.Dropout(0.2),
-            nn.Linear(64, 32),        nn.ReLU(),
-            nn.Linear(32, 16),
-        )
-        self.decoder = nn.Sequential(
-            nn.Linear(16, 32), nn.ReLU(),
-            nn.Linear(32, 64), nn.ReLU(), nn.Dropout(0.2),
-            nn.Linear(64, input_dim),
-        )
-
-    def forward(self, x):
-        return self.decoder(self.encoder(x))
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +123,7 @@ def calibrate_and_save_thresholds(
 # Model loading
 # ---------------------------------------------------------------------------
 def load_model():
+    """Load production artifacts and return model, scaler, and feature order."""
     feature_columns = joblib.load(os.path.join(ART_DIR, "feature_columns.pkl"))
     scaler          = joblib.load(os.path.join(ART_DIR, "scaler.pkl"))
     model = Autoencoder(len(feature_columns))
@@ -296,6 +276,7 @@ def run_latency_test() -> tuple:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> int:
+    """Run all four objective checks and return a shell-style status code."""
     SEP = "=" * 62
 
     print(SEP)

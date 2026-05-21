@@ -1,23 +1,35 @@
+"""Database access helpers for the IDS application.
+
+All paths in this module are intentionally relative to the current working
+directory. The application is normally launched from app/, so these helpers
+read and write app/threat_memory.db and app/logs/.
+"""
+
 import sqlite3
-import os
 from datetime import datetime, timezone
 import pandas as pd
-from response_engine import (
-    format_response_block,
-)
-from schema import create_db
 
-# This script is used to test the database connection and verify that the threat_memory table was created successfully.
-# It also inserts a mock entry into the table and retrieves all entries to confirm that the data is being stored correctly.
-# Run this script after running schema.py to set up the database. You should see the mock entry printed in the output.
-# It has a check so that you don't accidentally insert the mock entry multiple times if you run this script more than once.
+try:
+    from .paths import db_path, ensure_runtime_dirs, response_logs_dir
+    from .response_engine import format_response_block
+    from .schema import create_db
+except ImportError:
+    from paths import db_path, ensure_runtime_dirs, response_logs_dir
+    from response_engine import format_response_block
+    from schema import create_db
 
-# Version 2: Insert Function, store response block in log folder if provided
 
 def db_insert_events(anomaly_type: str, ip: str, error: float, risk, recommendation):
+    """Persist a non-low alert and write a response log for High/Critical risk.
+
+    live_capture.py only calls this for risk.code > 0, so Low events stay out of
+    threat_events. The risk object is the RiskLevel dataclass from
+    risk_classifier.py; recommendation is the Recommendation dataclass from
+    response_engine.py.
+    """
     entry_id = None
     try:
-        with sqlite3.connect("threat_memory.db") as conn:
+        with sqlite3.connect(db_path()) as conn:
             cursor = conn.cursor()
 
             cursor.execute(
@@ -40,20 +52,22 @@ def db_insert_events(anomaly_type: str, ip: str, error: float, risk, recommendat
     except Exception as exc:
         print(f"[WARN] DB write failed: {exc}")
 
-    if risk.name != "Low" and risk.name != "Medium":
+    if entry_id is not None and risk.name != "Low" and risk.name != "Medium":
+        # High and Critical alerts get an operator-facing response playbook.
+        # The file is named after the SQLite row id so the dashboard can find it.
+        log_dir = response_logs_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
 
-        log_dir = f"logs/response_logs"
-        os.makedirs(log_dir, exist_ok=True)
-
-        with open(f"{log_dir}/{entry_id}.txt", "w", encoding="utf-8") as f:
+        with open(log_dir / f"{entry_id}.txt", "w", encoding="utf-8") as f:
             f.write(format_response_block(recommendation, ip))
 
-# Version 2.1 Read Database: concurrent IP addresses
+
 def db_read():
-    with sqlite3.connect("threat_memory.db") as conn:
+    """Return repeated IP and repeated anomaly summaries for text reports."""
+    with sqlite3.connect(db_path()) as conn:
         cursor = conn.cursor()
 
-        # repeated IPs
+        # IPs with more than one stored alert.
         cursor.execute("""
             SELECT IP, COUNT(*)
             FROM threat_events
@@ -63,7 +77,7 @@ def db_read():
         """)
         repeated_ips = cursor.fetchall()
 
-        # repeated anomaly types per IP
+        # IP/anomaly combinations that repeat often enough to be interesting.
         cursor.execute("""
             SELECT IP, anomaly_type, COUNT(*)
             FROM threat_events
@@ -75,10 +89,13 @@ def db_read():
 
     return repeated_ips, repeated_anomalies
 
+
 def write_summary(state):
+    """Write a plain-text rollup used by older CLI workflows."""
     repeated_ips, repeated_anomalies = state
 
-    with open("logs/summary.txt", "w", encoding="utf-8") as f:
+    ensure_runtime_dirs()
+    with open(response_logs_dir().parent / "summary.txt", "w", encoding="utf-8") as f:
         f.write("Threat Summary\n\n")
 
         f.write("Repeated IPs:\n")
@@ -95,13 +112,17 @@ def write_summary(state):
         else:
             f.write("None\n")
 
-# Version 2.2 adding insert for threshold table
-def save_threshold(threshold: float, user_id: str = "current_user"):
 
-    if not os.path.exists("threat_memory.db"):
+def save_threshold(threshold: float, user_id: str = "current_user"):
+    """Save a user-specific reconstruction-error threshold.
+
+    The default user_id mirrors the CLI live-capture workflow, while the
+    dashboard passes real user ids from auth.py.
+    """
+    if not db_path().exists():
         create_db()
 
-    with sqlite3.connect("threat_memory.db") as conn:
+    with sqlite3.connect(db_path()) as conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO user_thresholds (user_id, threshold)
@@ -110,8 +131,10 @@ def save_threshold(threshold: float, user_id: str = "current_user"):
             (user_id, threshold)
         )
 
+
 def load_threshold(user_id: str = "current_user"):
-    with sqlite3.connect("threat_memory.db") as conn:
+    """Load a saved threshold, falling back to the shipped artifact value."""
+    with sqlite3.connect(db_path()) as conn:
         cursor = conn.execute(
             "SELECT threshold FROM user_thresholds WHERE user_id = ?",
             (user_id,)
@@ -123,9 +146,10 @@ def load_threshold(user_id: str = "current_user"):
     else:
         return 334.522111
 
-# Version 3.0 adding db read for dashboard tabs
+
 def db_read_risk_counts():
-    conn = sqlite3.connect("threat_memory.db")
+    """Return dashboard-ready counts for Medium/High/Critical stored alerts."""
+    conn = sqlite3.connect(db_path())
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -150,8 +174,10 @@ def db_read_risk_counts():
 
     return risk_counts
 
+
 def db_read_history():
-    conn = sqlite3.connect("threat_memory.db")
+    """Return the full stored alert table in newest-first order."""
+    conn = sqlite3.connect(db_path())
     df = pd.read_sql_query(
         """
         SELECT id, timestamp, IP, anomaly_type, recon_error, risk_level, suggested_response
@@ -163,20 +189,22 @@ def db_read_history():
     conn.close()
     return df
 
+
 def db_increment_low_count():
     """Increments a counter for Low-risk events to track the FPR denominator."""
     try:
-        with sqlite3.connect("threat_memory.db") as conn:
+        with sqlite3.connect(db_path()) as conn:
             cursor = conn.cursor()
             cursor.execute("UPDATE general_metrics SET metric_value = metric_value + 1 WHERE metric_name = 'low_risk_events'")
             conn.commit()
     except Exception as exc:
         print(f"[WARN] Failed to increment low count: {exc}")
 
+
 def db_get_low_count():
     """Retrieves the count of Low-risk events for FPR calculation."""
     try:
-        with sqlite3.connect("threat_memory.db") as conn:
+        with sqlite3.connect(db_path()) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT metric_value FROM general_metrics WHERE metric_name = 'low_risk_events'")
             row = cursor.fetchone()
@@ -184,8 +212,10 @@ def db_get_low_count():
     except:
         return 0
 
+
 def db_read_metrics():
-    with sqlite3.connect("threat_memory.db") as conn:
+    """Return aggregate metrics used by the dashboard Metrics tab."""
+    with sqlite3.connect(db_path()) as conn:
         cursor = conn.cursor()
 
         cursor.execute("SELECT COUNT(*) FROM threat_events")

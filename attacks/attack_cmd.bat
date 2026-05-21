@@ -1,4 +1,8 @@
 @echo off
+:: Manual Windows lab traffic generator.
+:: Run only against a host you own or have explicit permission to test.
+:: Each section prints a timestamp block that can be copied into
+:: app/true_positives.py RAW_ATTACKS for later detection analysis.
 echo ============================================================
 echo   WINDOWS CMD ATTACK SIMULATOR
 echo   Target: %1
