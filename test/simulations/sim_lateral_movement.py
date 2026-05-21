@@ -66,6 +66,7 @@ def tcp_enumerate(src: str, targets: list[str], ports: list[int],
 
 
 def main():
+    """Parse options and run the two-phase lateral-movement simulation."""
     parser = argparse.ArgumentParser(
         description="IDS simulation -- lateral movement (ICMP sweep + TCP SYN scan)")
     parser.add_argument("--src", default="127.0.0.1",

@@ -1,3 +1,10 @@
+"""Experimental benchmark script for comparing IDS model families.
+
+This is separate from the production app. It trains an autoencoder,
+IsolationForest, RandomForest, and simple ensembles on a selected CSV, then
+writes comparison plots into the current directory.
+"""
+
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -116,6 +123,7 @@ dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
 
 
 class Autoencoder(nn.Module):
+    """Autoencoder used for experimental comparison in this benchmark."""
     def __init__(self, input_dim):
         super(Autoencoder, self).__init__()
         self.encoder = nn.Sequential(
@@ -270,6 +278,7 @@ TARGET_NAMES = ["Benign", "Attack"]
 
 
 def print_results(name, y_true, y_pred, y_score):
+    """Print classification metrics and return ROC AUC when computable."""
     print("=" * 52)
     print(f" {name}")
     print("=" * 52)
@@ -359,6 +368,7 @@ print("Saved: ae_loss_curve.png")
 
 # ── B. Confusion Matrices ──
 def plot_confusion(y_true, y_pred, title, filename):
+    """Save and display one confusion matrix heatmap."""
     cm = confusion_matrix(y_true, y_pred)
     plt.figure(figsize=(5, 4))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',

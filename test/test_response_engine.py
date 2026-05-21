@@ -37,6 +37,7 @@ class _Flow:
 
 
 def _key(src_port=12345, dst_port=80, proto=6):
+    """Build the normalized 5-tuple shape expected by infer_anomaly_type()."""
     return ("1.2.3.4", "5.6.7.8", src_port, dst_port, proto)
 
 

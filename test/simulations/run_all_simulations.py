@@ -55,6 +55,7 @@ SEPARATOR = "=" * 65
 
 
 def run_scenario(name: str, meta: dict, iface: str, gap: float):
+    """Run one simulation script, then pause so live_capture can flush flows."""
     script = SIM_DIR / meta["script"]
     cmd = [sys.executable, str(script), "--iface", iface] + meta["extra_args"]
 
@@ -73,6 +74,7 @@ def run_scenario(name: str, meta: dict, iface: str, gap: float):
 
 
 def main():
+    """Parse CLI options and run the requested simulation scenarios."""
     parser = argparse.ArgumentParser(
         description="Run all 5 IDS attack simulations in sequence")
     parser.add_argument("--iface", default=r"\Device\NPF_Loopback",

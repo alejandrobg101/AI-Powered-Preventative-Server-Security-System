@@ -91,6 +91,7 @@ def exfil_stream(src: str, dst: str, dst_port: int, label: str,
 
 
 def main():
+    """Parse options and run one or both exfiltration channels."""
     parser = argparse.ArgumentParser(
         description="IDS simulation -- data exfiltration (large asymmetric outbound flows)")
     parser.add_argument("--src", default="127.0.0.1",

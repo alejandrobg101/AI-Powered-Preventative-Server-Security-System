@@ -1,3 +1,10 @@
+"""Generate a synthetic IDS dataset for controlled model experiments.
+
+The generated rows imitate the same feature names used by CIC-IDS2017 while
+adding labels for lab scenarios that are easier to reason about than raw PCAP
+captures. Run from test/data/ to write synthetic_security_dataset.csv there.
+"""
+
 import numpy as np
 import pandas as pd
 import warnings
@@ -16,9 +23,12 @@ SAMPLES = {
 }
 
 def make_features(label, n):
+    """Return n synthetic rows for one traffic/attack label."""
     base = {}
 
     if label == "BENIGN":
+        # Benign traffic is intentionally broad: mixed durations, symmetric
+        # packets, common TCP flags, and modern TCP window sizes.
         base["Flow Duration"]           = np.random.lognormal(10, 2, n).clip(100, 120_000_000)
         base["Total Fwd Packets"]       = np.random.randint(2, 25, n).astype(float)
         base["Total Backward Packets"]  = np.random.randint(2, 20, n).astype(float)
@@ -236,6 +246,7 @@ for label, n in SAMPLES.items():
     print(f"  Generating {n:,} {label} samples...")
     dfs.append(make_features(label, n))
 
+# Shuffle after concatenation so train/test splits do not receive label blocks.
 df = pd.concat(dfs, ignore_index=True).sample(frac=1, random_state=42).reset_index(drop=True)
 df.to_csv("synthetic_security_dataset.csv", index=False)
 

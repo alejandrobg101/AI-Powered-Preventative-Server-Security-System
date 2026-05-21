@@ -51,6 +51,7 @@ def probe_port(src: str, dst: str, dport: int, iface: str):
 
 
 def main():
+    """Parse options and repeatedly probe privileged service ports."""
     parser = argparse.ArgumentParser(
         description="IDS simulation -- privilege escalation (privileged port probing)")
     parser.add_argument("--src", default="127.0.0.1",

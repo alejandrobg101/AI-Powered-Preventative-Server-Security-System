@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  fast-checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile Python files
+        run: |
+          PYTHONPYCACHEPREFIX=/tmp/ids_pycache python -m py_compile \
+            app/*.py \
+            clear_events.py \
+            test/*.py \
+            test/simulations/*.py \
+            test/data/fake_data.py
+
+      - name: Run fast dependency-light tests
+        run: |
+          python -B test/test_risk_classifier.py
+          python -B test/test_response_engine.py

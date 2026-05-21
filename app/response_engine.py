@@ -45,6 +45,7 @@ ALL_TYPES = (
 # ─────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class Recommendation:
+    """Operator-facing mitigation advice for a detected anomaly."""
     anomaly_type: str
     description: str               # human-readable threat description
     summary: str                   # concise, DB-ready action (≤140 chars)
@@ -246,6 +247,10 @@ def infer_anomaly_type(flow, key: tuple) -> str:
     total_pkts = flow.fwd_pkts + flow.bwd_pkts
     pkt_rate   = total_pkts / duration_s         # packets per second
 
+    # Rules intentionally favor specific signatures before generic protocol
+    # fallbacks. For example, UDP/53 amplification should not be swallowed by
+    # GENERIC_UDP just because it is still UDP traffic.
+
     # ── ICMP ─────────────────────────────────────────────────
     if proto == 1:
         return ICMP_FLOOD if pkt_rate > 50 else GENERIC_ICMP
@@ -295,6 +300,8 @@ def get_recommendation(anomaly_type: str, risk_name: str) -> Recommendation:
     risk_name should be one of: 'Low', 'Medium', 'High', 'Critical'.
     Low-risk flows are not typically passed here, but are handled gracefully.
     """
+    # Unknown anomaly names keep their original label but borrow the UNKNOWN
+    # playbook so callers still get useful response steps.
     entry = _KB.get(anomaly_type, _KB[UNKNOWN])
     summary = entry.get(risk_name) or entry["Medium"]
     escalate = risk_name in ("High", "Critical")

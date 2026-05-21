@@ -130,6 +130,7 @@ def dns_beacon_burst(src: str, dns_server: str, iface: str, queries: int, delay:
 # ---- Main --------------------------------------------------------------------------------------------------------------------------------------------
 
 def main():
+    """Parse simulation options and run the selected abnormal-process modes."""
     parser = argparse.ArgumentParser(
         description="IDS simulation -- abnormal process execution (beacon / URG / DNS burst)")
     parser.add_argument("--src", default="127.0.0.1",

@@ -1,19 +1,39 @@
-import os
+"""Streamlit UI for local IDS operation.
+
+The dashboard handles local login/register flows, starts and stops the live
+capture subprocess, displays SQLite-backed alert data, and manages per-user
+threshold calibration sessions.
+"""
+
 from datetime import datetime, timezone
 
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
-from auth import login_user, register_user
-from db_functions import db_read_history, db_read_metrics, db_read_risk_counts, load_threshold
-from schema import create_db
-import live_capture_manager
-from threshold_calibrator import (
-    get_calibration_status,
-    get_user_latest_calibration,
-    start_calibration,
-    stop_calibration,
-)
+try:
+    from .auth import login_user, register_user
+    from .db_functions import db_read_history, db_read_metrics, db_read_risk_counts, load_threshold
+    from .paths import live_alerts_path, response_logs_dir
+    from .schema import create_db
+    from . import live_capture_manager
+    from .threshold_calibrator import (
+        get_calibration_status,
+        get_user_latest_calibration,
+        start_calibration,
+        stop_calibration,
+    )
+except ImportError:
+    from auth import login_user, register_user
+    from db_functions import db_read_history, db_read_metrics, db_read_risk_counts, load_threshold
+    from paths import live_alerts_path, response_logs_dir
+    from schema import create_db
+    import live_capture_manager
+    from threshold_calibrator import (
+        get_calibration_status,
+        get_user_latest_calibration,
+        start_calibration,
+        stop_calibration,
+    )
 
 # Ensure all tables exist (idempotent; safe on every startup)
 create_db()
@@ -48,15 +68,18 @@ RISK_COLOR = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🟢
 
 
 def _badge(risk: str) -> str:
+    """Return a small markdown risk badge for historical alert rows."""
     return f"{RISK_COLOR.get(risk, '⚪')} **{risk}**"
 
 
 def _parse_db_time(ts: str) -> datetime:
+    """Parse the UTC timestamp format used by db_functions.py."""
     return datetime.strptime(ts, "%Y-%m-%d %H:%M:%S UTC").replace(tzinfo=timezone.utc)
 
 
 # ── Auth page ────────────────────────────────────────────────────────────────
 def _show_auth_page():
+    """Render the unauthenticated login/register screen."""
     st.title("AI Security Dashboard")
     st.subheader("Sign in to your account")
 
@@ -108,6 +131,7 @@ def _show_auth_page():
 
 # ── Threshold Adjuster tab ───────────────────────────────────────────────────
 def _show_threshold_adjuster():
+    """Render the calibration workflow for the logged-in user."""
     st.subheader("Threshold Adjuster")
     user_id = st.session_state.user_id
 
@@ -123,6 +147,8 @@ def _show_threshold_adjuster():
     if session is None:
         latest = get_user_latest_calibration(user_id)
         if latest and latest["status"] == "running":
+            # Streamlit reloads the script on interaction. Persisting session id
+            # in SQLite lets the progress UI reconnect after a refresh/login.
             st.session_state.active_session_id = latest["session_id"]
             session = latest
 
@@ -202,6 +228,7 @@ def _show_threshold_adjuster():
 
 
 def _show_calibration_result(session: dict):
+    """Render the final status block for the user's most recent calibration."""
     status = session["status"]
     if status == "completed":
         t = session.get("computed_threshold")
@@ -233,6 +260,7 @@ def _show_calibration_result(session: dict):
 
 # ── Main dashboard ───────────────────────────────────────────────────────────
 def _show_main_dashboard():
+    """Render all authenticated dashboard tabs."""
     st.title("AI Security Dashboard")
 
     with st.sidebar:
@@ -278,17 +306,21 @@ def _show_main_dashboard():
                     help="e.g. 'Wi-Fi' or 'Ethernet'. Leave blank to use the Scapy default.",
                 )
             if st.button("Start IDS", type="primary"):
+                # live_capture_manager starts live_capture.py with --no-dashboard
+                # so the child process does not spawn another Streamlit server.
                 live_capture_manager.start(iface=ids_iface.strip() or None)
                 st.rerun()
 
         st.divider()
 
         # ── Alert feed ───────────────────────────────────────────────────────
-        live_file = "logs/live_alerts.txt"
-        if os.path.exists(live_file):
+        live_file = live_alerts_path()
+        if live_file.exists():
             with open(live_file, "r", encoding="utf-8") as f:
                 alerts = f.read()
             if alerts.strip():
+                # live_capture.py separates alerts with a fixed dashed line.
+                # Reverse blocks so the newest alert is shown at the top.
                 blocks = [b.strip() for b in alerts.strip().split("----------------------------------------") if b.strip()]
                 blocks.reverse()
                 st.code("\n\n----------------------------------------\n\n".join(blocks), language="text")
@@ -333,8 +365,8 @@ def _show_main_dashboard():
                     with col_right:
                         st.markdown("**Recommended Action**")
                         st.info(rec)
-                    log_path = f"logs/response_logs/{row['id']}.txt"
-                    if os.path.exists(log_path):
+                    log_path = response_logs_dir() / f"{row['id']}.txt"
+                    if log_path.exists():
                         st.markdown("**Full Response Log**")
                         with open(log_path, "r", encoding="utf-8") as f:
                             st.code(f.read(), language="text")
@@ -345,8 +377,8 @@ def _show_main_dashboard():
 
             st.subheader("Response Log Viewer")
             selected_id = st.number_input("Enter event ID to view response log:", min_value=1, step=1)
-            log_path = f"logs/response_logs/{int(selected_id)}.txt"
-            if os.path.exists(log_path):
+            log_path = response_logs_dir() / f"{int(selected_id)}.txt"
+            if log_path.exists():
                 with open(log_path, "r", encoding="utf-8") as f:
                     st.code(f.read(), language="text")
             else:

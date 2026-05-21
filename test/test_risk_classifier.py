@@ -8,6 +8,9 @@ from risk_classifier import classify, LOW, MEDIUM, HIGH, CRITICAL
 
 _T = {"medium": 1.0, "high": 2.5, "critical": 6.0}
 
+# These tests pin the inclusive/exclusive boundary behavior used by the
+# dashboard and database pipeline. Exact threshold values belong to the lower
+# risk tier; only values above a boundary escalate.
 
 def test_low_at_zero():
     assert classify(0.0, _T) is LOW

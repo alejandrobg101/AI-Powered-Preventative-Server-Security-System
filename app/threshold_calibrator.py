@@ -17,7 +17,11 @@ import threading
 import uuid
 from datetime import datetime, timezone
 
-DB_PATH = "threat_memory.db"
+try:
+    from .paths import app_dir, db_path, artifacts_dir
+except ImportError:
+    from paths import app_dir, db_path, artifacts_dir
+
 CALIBRATION_TIMEOUT = 240  # 4 minutes
 
 _active_procs: dict[str, subprocess.Popen] = {}
@@ -33,10 +37,12 @@ _THRESHOLD_RE = re.compile(r"New threshold\s*:\s*([\d.]+)")
 
 def start_calibration(user_id: str, iface: str | None = None,
                       timeout: int = CALIBRATION_TIMEOUT) -> str:
-    """Launch calibration in a background thread. Returns session_id."""
+    """Launch calibration in a background thread and return its session_id."""
     session_id = str(uuid.uuid4())
 
-    with sqlite3.connect(DB_PATH) as conn:
+    # Insert the session before starting the thread so the UI can display
+    # progress immediately on the next Streamlit rerun.
+    with sqlite3.connect(db_path()) as conn:
         conn.execute(
             """INSERT INTO calibration_sessions
                (session_id, user_id, status, started_at, duration_seconds, sample_count)
@@ -56,7 +62,7 @@ def start_calibration(user_id: str, iface: str | None = None,
 
 def stop_calibration(session_id: str) -> bool:
     """Stop a running calibration. Returns False if not found/running."""
-    with sqlite3.connect(DB_PATH) as conn:
+    with sqlite3.connect(db_path()) as conn:
         row = conn.execute(
             "SELECT status FROM calibration_sessions WHERE session_id = ?",
             (session_id,),
@@ -66,7 +72,7 @@ def stop_calibration(session_id: str) -> bool:
         return False
 
     # Mark stopped immediately so the UI updates on next refresh
-    with sqlite3.connect(DB_PATH) as conn:
+    with sqlite3.connect(db_path()) as conn:
         conn.execute(
             "UPDATE calibration_sessions SET status='stopped', stopped_at=? WHERE session_id=?",
             (_now(), session_id),
@@ -86,7 +92,7 @@ def stop_calibration(session_id: str) -> bool:
 def get_calibration_status(session_id: str) -> dict | None:
     """Return the current state of a calibration session."""
     try:
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(db_path()) as conn:
             row = conn.execute(
                 """SELECT session_id, user_id, status, started_at, stopped_at,
                           duration_seconds, sample_count, computed_threshold, error_message
@@ -103,7 +109,7 @@ def get_calibration_status(session_id: str) -> dict | None:
 def get_user_latest_calibration(user_id: str) -> dict | None:
     """Return the most recent calibration session for a user."""
     try:
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(db_path()) as conn:
             row = conn.execute(
                 """SELECT session_id, user_id, status, started_at, stopped_at,
                           duration_seconds, sample_count, computed_threshold, error_message
@@ -124,6 +130,7 @@ def get_user_latest_calibration(user_id: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def _row_to_dict(row) -> dict:
+    """Convert the SQLite tuple shape into the dashboard/session API shape."""
     keys = [
         "session_id", "user_id", "status", "started_at", "stopped_at",
         "duration_seconds", "sample_count", "computed_threshold", "error_message",
@@ -132,14 +139,17 @@ def _row_to_dict(row) -> dict:
 
 
 def _now() -> str:
+    """Return the DB timestamp format used throughout the app."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 def _app_dir() -> str:
-    return os.path.dirname(os.path.abspath(__file__))
+    """Return app/ so subprocess cwd and artifact reads are stable."""
+    return str(app_dir())
 
 
 def _run(session_id: str, user_id: str, iface: str | None, timeout: int):
+    """Run recalibrate_threshold.py and mirror its progress into SQLite."""
     script = os.path.join(_app_dir(), "recalibrate_threshold.py")
     cmd = [sys.executable, "-u", script, "--timeout", str(timeout)]
     if iface:
@@ -171,11 +181,13 @@ def _run(session_id: str, user_id: str, iface: str | None, timeout: int):
             line = raw_line.rstrip()
             output_lines.append(line)
 
+            # recalibrate_threshold.py prints "Flow N:" for every scored flow.
+            # Parsing stdout avoids a tighter coupling between the two scripts.
             m = _FLOW_RE.search(line)
             if m:
                 flow_count = int(m.group(1))
                 try:
-                    with sqlite3.connect(DB_PATH) as conn:
+                    with sqlite3.connect(db_path()) as conn:
                         conn.execute(
                             "UPDATE calibration_sessions SET sample_count=? WHERE session_id=?",
                             (flow_count, session_id),
@@ -190,7 +202,7 @@ def _run(session_id: str, user_id: str, iface: str | None, timeout: int):
         proc.wait()
 
         # If the user already stopped it, do nothing more
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(db_path()) as conn:
             row = conn.execute(
                 "SELECT status FROM calibration_sessions WHERE session_id=?",
                 (session_id,),
@@ -203,7 +215,7 @@ def _run(session_id: str, user_id: str, iface: str | None, timeout: int):
             new_threshold = _read_artifact_threshold() or threshold_from_output
             if new_threshold is not None:
                 _save_user_threshold(user_id, new_threshold)
-                with sqlite3.connect(DB_PATH) as conn:
+                with sqlite3.connect(db_path()) as conn:
                     conn.execute(
                         """UPDATE calibration_sessions
                            SET status='completed', stopped_at=?, sample_count=?,
@@ -233,7 +245,8 @@ def _run(session_id: str, user_id: str, iface: str | None, timeout: int):
 
 
 def _read_artifact_threshold() -> float | None:
-    path = os.path.join(_app_dir(), "artifacts", "threshold.pkl")
+    """Read the threshold written by recalibrate_threshold.py, if available."""
+    path = artifacts_dir() / "threshold.pkl"
     try:
         import joblib
         return float(joblib.load(path))
@@ -242,7 +255,8 @@ def _read_artifact_threshold() -> float | None:
 
 
 def _save_user_threshold(user_id: str, threshold: float):
-    with sqlite3.connect(DB_PATH) as conn:
+    """Persist the threshold for the user and the CLI default user."""
+    with sqlite3.connect(db_path()) as conn:
         conn.execute(
             "INSERT OR REPLACE INTO user_thresholds (user_id, threshold) VALUES (?, ?)",
             (user_id, threshold),
@@ -255,8 +269,9 @@ def _save_user_threshold(user_id: str, threshold: float):
 
 
 def _mark_failed(session_id: str, error_msg: str):
+    """Best-effort failure update used from exception handlers."""
     try:
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(db_path()) as conn:
             conn.execute(
                 """UPDATE calibration_sessions
                    SET status='failed', error_message=?, stopped_at=?

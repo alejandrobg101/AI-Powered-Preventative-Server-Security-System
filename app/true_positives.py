@@ -1,8 +1,18 @@
+"""Calculate detection rate and latency for known attack time windows.
+
+Edit RAW_ATTACKS with local Puerto Rico timestamps from your test run. The
+script converts each window to UTC, reads stored alerts, and treats Medium or
+higher risk as a valid detection.
+"""
+
 import sqlite3
 from datetime import datetime
 import zoneinfo
 
-DB_PATH = "threat_memory.db"
+try:
+    from .paths import db_path
+except ImportError:
+    from paths import db_path
 
 # 1. ENTER YOUR LOCAL PUERTO RICO TIMES HERE
 # Format: YYYY-MM-DD HH:MM:SS
@@ -23,10 +33,13 @@ def pr_to_utc(local_time_str):
     return utc_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
 
 def parse_time(t):
+    """Parse the UTC timestamp format stored in threat_memory.db."""
     return datetime.strptime(t, "%Y-%m-%d %H:%M:%S UTC")
 
+
 def get_rows(start, end):
-    with sqlite3.connect(DB_PATH) as conn:
+    """Fetch stored alerts between two UTC timestamp strings."""
+    with sqlite3.connect(db_path()) as conn:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT id, timestamp, IP, anomaly_type, recon_error, risk_level, suggested_response
@@ -37,6 +50,7 @@ def get_rows(start, end):
         return cursor.fetchall()
 
 def summarize(rows):
+    """Count rows by (anomaly_type, risk_level) for per-window reporting."""
     counts = {}
     for row in rows:
         anomaly_type = row[3]
@@ -46,6 +60,7 @@ def summarize(rows):
     return counts
 
 def is_positive(row):
+    """Return True when an alert is considered a detection."""
     # UPDATED: Now includes Medium alerts as a 'positive' detection
     return row[5] in ("Medium", "High", "Critical")
 
